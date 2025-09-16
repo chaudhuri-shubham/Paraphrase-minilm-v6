@@ -1,0 +1,31 @@
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Example dataframe with multiple rows
+df = pd.DataFrame({
+    "col1": ["[-0.12 0.34 5.46 6.47]", "[1.0 2.0 3.0 4.0]"],
+    "col2": ["[0.23,9.8,-6.45,0.45]", "[1.0,2.0,3.0,4.0]"]
+})
+
+# Function to parse string to numpy array
+def parse_array(x):
+    # Try both separators
+    if "," in x:
+        return np.fromstring(x.strip("[]"), sep=",")
+    else:
+        return np.fromstring(x.strip("[]"), sep=" ")
+
+# Convert columns
+df["col1"] = df["col1"].apply(parse_array)
+df["col2"] = df["col2"].apply(parse_array)
+
+# Compute cosine similarity row by row
+def row_cosine_similarity(row):
+    v1 = row["col1"].reshape(1, -1)
+    v2 = row["col2"].reshape(1, -1)
+    return cosine_similarity(v1, v2)[0][0]
+
+df["cosine_similarity"] = df.apply(row_cosine_similarity, axis=1)
+
+print(df)
