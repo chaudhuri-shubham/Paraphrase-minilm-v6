@@ -10,6 +10,8 @@ df = pd.DataFrame({
 
 # Function to parse string to numpy array
 def parse_array(x):
+
+
     # Try both separators
     if "," in x:
         return np.fromstring(x.strip("[]"), sep=",")
@@ -42,3 +44,13 @@ def safe_eval(s):
         return parse_vec(s)   # fallback to regex version
 
 df['vec_list'] = df['vec_str'].apply(safe_eval)
+
+
+# Convert commas to space, strip brackets, split, and cast
+def simple_convert(s):
+    s = str(s).strip('[]')
+    s = s.replace(',', ' ')
+    parts = [p for p in s.split() if p]
+    return [float(p) for p in parts]
+
+df['vec_list'] = df['vec_str'].apply(simple_convert)
