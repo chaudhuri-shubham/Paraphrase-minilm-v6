@@ -29,3 +29,16 @@ def row_cosine_similarity(row):
 df["cosine_similarity"] = df.apply(row_cosine_similarity, axis=1)
 
 print(df)
+
+
+
+
+import ast
+def safe_eval(s):
+    try:
+        x = ast.literal_eval(s)
+        return [float(i) for i in x]
+    except Exception:
+        return parse_vec(s)   # fallback to regex version
+
+df['vec_list'] = df['vec_str'].apply(safe_eval)
