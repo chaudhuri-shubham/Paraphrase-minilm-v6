@@ -1,56 +1,160 @@
+import os
+import time
 import pandas as pd
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from pptx import Presentation
+import subprocess
+import textract
 
-# Example dataframe with multiple rows
-df = pd.DataFrame({
-    "col1": ["[-0.12 0.34 5.46 6.47]", "[1.0 2.0 3.0 4.0]"],
-    "col2": ["[0.23,9.8,-6.45,0.45]", "[1.0,2.0,3.0,4.0]"]
-})
+# Optional pptx2txt
+try:
+    import pptx2txt
+    has_pptx2txt = True
+except ImportError:
+    has_pptx2txt = False
 
-# Function to parse string to numpy array
-def parse_array(x):
+# Directory containing ppt/pptx files
+input_dir = "ppt_test_files"
 
+# Output Excel file
+output_file = "ppt_extraction_comparison.xlsx"
 
-    # Try both separators
-    if "," in x:
-        return np.fromstring(x.strip("[]"), sep=",")
-    else:
-        return np.fromstring(x.strip("[]"), sep=" ")
-
-# Convert columns
-df["col1"] = df["col1"].apply(parse_array)
-df["col2"] = df["col2"].apply(parse_array)
-
-# Compute cosine similarity row by row
-def row_cosine_similarity(row):
-    v1 = row["col1"].reshape(1, -1)
-    v2 = row["col2"].reshape(1, -1)
-    return cosine_similarity(v1, v2)[0][0]
-
-df["cosine_similarity"] = df.apply(row_cosine_similarity, axis=1)
-
-print(df)
-
-
-
-
-import ast
-def safe_eval(s):
+# ------------------------------------------------
+#  Extraction Functions
+# ------------------------------------------------
+def extract_with_python_pptx(file_path):
+    """Extract text using python-pptx"""
     try:
-        x = ast.literal_eval(s)
-        return [float(i) for i in x]
-    except Exception:
-        return parse_vec(s)   # fallback to regex version
+        prs = Presentation(file_path)
+        text = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    text.append(shape.text)
+        return "\n".join(text)
+    except Exception as e:
+        return f"ERROR: {e}"
 
-df['vec_list'] = df['vec_str'].apply(safe_eval)
+def extract_with_pptx2txt(file_path):
+    """Extract text using pptx2txt"""
+    try:
+        return pptx2txt.PPTX2TXT().process(file_path)
+    except Exception as e:
+        return f"ERROR: {e}"
 
+def extract_with_textract(file_path):
+    """Extract text using textract"""
+    try:
+        text = textract.process(file_path).decode("utf-8", errors="ignore")
+        return text
+    except Exception as e:
+        return f"ERROR: {e}"
 
-# Convert commas to space, strip brackets, split, and cast
-def simple_convert(s):
-    s = str(s).strip('[]')
-    s = s.replace(',', ' ')
-    parts = [p for p in s.split() if p]
-    return [float(p) for p in parts]
+def extract_with_unoconv(file_path):
+    """Extract text using LibreOffice unoconv"""
+    try:
+        txt_output = file_path + ".txt"
+        subprocess.run(["unoconv", "-f", "txt", file_path], check=True)
+        with open(txt_output, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        os.remove(txt_output)
+        return text
+    except Exception as e:
+        return f"ERROR: {e}"
 
-df['vec_list'] = df['vec_str'].apply(simple_convert)
+# ------------------------------------------------
+#  Benchmarking
+# ------------------------------------------------
+methods = {
+    "python-pptx": extract_with_python_pptx,
+    "pptx2txt": extract_with_pptx2txt if has_pptx2txt else None,
+    "textract": extract_with_textract,
+    "unoconv": extract_with_unoconv,
+}
+
+results = []
+all_text_data = {}
+
+for file in os.listdir(input_dir):
+    if not file.lower().endswith((".ppt", ".pptx")):
+        continue
+
+    file_path = os.path.join(input_dir, file)
+    print(f"\nProcessing: {file}")
+
+    for method_name, func in methods.items():
+        if func is None:
+            continue
+
+        start = time.time()
+        text = func(file_path)
+        duration = round(time.time() - start, 2)
+        error = "Yes" if text.startswith("ERROR") else "No"
+        char_count = len(text) if not text.startswith("ERROR") else 0
+
+        results.append({
+            "File": file,
+            "Method": method_name,
+            "Time (s)": duration,
+            "Characters Extracted": char_count,
+            "Error": error,
+        })
+
+        # Save text for reference
+        if method_name not in all_text_data:
+            all_text_data[method_name] = []
+        all_text_data[method_name].append({
+            "File": file,
+            "Extracted_Text": text,
+        })
+
+# ------------------------------------------------
+#  Accuracy Estimation (Cross Comparison)
+# ------------------------------------------------
+def jaccard_similarity(a, b):
+    """Basic similarity metric for text overlap"""
+    set_a, set_b = set(a.split()), set(b.split())
+    if not set_a or not set_b:
+        return 0
+    return round(len(set_a & set_b) / len(set_a | set_b), 3)
+
+accuracy_data = []
+for file in os.listdir(input_dir):
+    if not file.lower().endswith((".ppt", ".pptx")):
+        continue
+    extracted = {m: next((t["Extracted_Text"] for t in v if t["File"] == file), "")
+                 for m, v in all_text_data.items()}
+    base = extracted.get("python-pptx", "")
+    for m, text in extracted.items():
+        if m != "python-pptx":
+            acc = jaccard_similarity(base, text)
+            accuracy_data.append({"File": file, "Method": m, "Accuracy_vs_python-pptx": acc})
+
+acc_df = pd.DataFrame(accuracy_data)
+
+# ------------------------------------------------
+#  Combine and Export
+# ------------------------------------------------
+summary_df = pd.DataFrame(results)
+summary_df = summary_df.merge(acc_df, on=["File", "Method"], how="left")
+
+pivot = pd.pivot_table(
+    summary_df,
+    values=["Time (s)", "Accuracy_vs_python-pptx"],
+    index="Method",
+    aggfunc={"Time (s)": "mean", "Accuracy_vs_python-pptx": "mean"}
+).round(3)
+
+# ------------------------------------------------
+#  Save to Excel
+# ------------------------------------------------
+with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+    # Save extracted text per method
+    for method_name, data in all_text_data.items():
+        df_text = pd.DataFrame(data)
+        df_text.to_excel(writer, sheet_name=method_name[:30], index=False)
+    # Save summary
+    summary_df.to_excel(writer, sheet_name="Summary_Details", index=False)
+    # Save pivot summary
+    pivot.to_excel(writer, sheet_name="Summary_Pivot")
+
+print(f"\n✅ Extraction complete. Results saved in {output_file}")
