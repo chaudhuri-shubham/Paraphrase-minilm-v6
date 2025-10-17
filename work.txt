@@ -1,3 +1,4 @@
+
 import os
 import time
 import pandas as pd
@@ -158,3 +159,633 @@ with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
     pivot.to_excel(writer, sheet_name="Summary_Pivot")
 
 print(f"\n✅ Extraction complete. Results saved in {output_file}")
+
+_____________________&&&_&&&&&
+
+#!/usr/bin/env python3
+"""
+pptx_extract_compare.py
+
+Run multiple PPTX extractors on a corpus and evaluate:
+ - extraction time
+ - text similarity vs ground-truth
+ - paragraph-order preservation (LCS)
+ - table extraction (presence + content similarity)
+
+Supported extractors implemented:
+ - python-pptx (pure Python)
+ - tika (tika-python; needs Java/Tika server on first use)
+ - textract (calls underlying parsers; may internally use python-pptx)
+ - pptx2txt2 if available (simple wrapper)
+
+Usage:
+    python pptx_extract_compare.py --pptx-dir ./pptx_files \
+        --gt-dir ./ground_truth \
+        --out-dir ./results \
+        --extractors python-pptx,tika,textract
+
+See README text in the header for setup notes.
+"""
+
+import os
+import sys
+import json
+import time
+import argparse
+import glob
+import csv
+import re
+from pathlib import Path
+from typing import List, Dict, Any, Tuple
+
+# Third-party libs
+try:
+    from pptx import Presentation  # python-pptx
+except Exception:
+    Presentation = None
+
+# optional: tika
+try:
+    from tika import parser as tika_parser
+    TIKA_AVAILABLE = True
+except Exception:
+    TIKA_AVAILABLE = False
+
+# optional: textract
+try:
+    import textract
+    TEXTRACT_AVAILABLE = True
+except Exception:
+    TEXTRACT_AVAILABLE = False
+
+# optional: pptx2txt2 is small - Python import name is pptx2txt2
+try:
+    import pptx2txt2
+    PPTX2TXT2_AVAILABLE = True
+except Exception:
+    PPTX2TXT2_AVAILABLE = False
+
+# for table display and processing:
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except Exception:
+    PANDAS_AVAILABLE = False
+
+# ---------------------------
+# Utility functions (metrics)
+# ---------------------------
+
+def levenshtein(s1: str, s2: str) -> int:
+    """Compute Levenshtein distance (classic DP)."""
+    if s1 == s2:
+        return 0
+    if len(s1) == 0:
+        return len(s2)
+    if len(s2) == 0:
+        return len(s1)
+    a, b = s1, s2
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            cur[j] = min(prev[j] + 1,     # deletion
+                         cur[j-1] + 1,   # insertion
+                         prev[j-1] + cost) # substitution
+        prev = cur
+    return prev[-1]
+
+def normalized_levenshtein_similarity(s1: str, s2: str) -> float:
+    """Return normalized similarity in [0,1], where 1 is identical."""
+    if not s1 and not s2:
+        return 1.0
+    dist = levenshtein(s1, s2)
+    maxlen = max(len(s1), len(s2))
+    if maxlen == 0:
+        return 1.0
+    return 1.0 - (dist / maxlen)
+
+def word_tokens(text: str) -> List[str]:
+    # simple tokenization: lowercase, split on non-word
+    toks = re.findall(r"\w+", text.lower())
+    return toks
+
+def word_level_f1(pred: str, gold: str) -> Tuple[float, float, float]:
+    p_tokens = word_tokens(pred)
+    g_tokens = word_tokens(gold)
+    if not p_tokens and not g_tokens:
+        return 1.0, 1.0, 1.0
+    from collections import Counter
+    pc = Counter(p_tokens)
+    gc = Counter(g_tokens)
+    # matches = sum(min(pc[t], gc[t]) for t in pc)
+    matches = sum((pc & gc).values())
+    precision = matches / (sum(pc.values()) or 1)
+    recall = matches / (sum(gc.values()) or 1)
+    if precision + recall == 0:
+        f1 = 0.0
+    else:
+        f1 = 2 * precision * recall / (precision + recall)
+    return precision, recall, f1
+
+def lcs_length(seq1: List[str], seq2: List[str]) -> int:
+    """Length of longest common subsequence between seq1 and seq2."""
+    n, m = len(seq1), len(seq2)
+    # Use DP with O(n*m) memory (small sequences)
+    dp = [[0]*(m+1) for _ in range(n+1)]
+    for i in range(n-1, -1, -1):
+        for j in range(m-1, -1, -1):
+            if seq1[i] == seq2[j]:
+                dp[i][j] = 1 + dp[i+1][j+1]
+            else:
+                dp[i][j] = max(dp[i+1][j], dp[i][j+1])
+    return dp[0][0]
+
+def paragraph_order_score(pred_pars: List[str], gold_pars: List[str]) -> float:
+    """
+    Compute order preservation score using LCS on paragraph-level.
+    We normalize by length of gold to get [0,1].
+    """
+    if not gold_pars:
+        return 1.0 if not pred_pars else 0.0
+    # To reduce false mismatch due to whitespace, we canonicalize paragraphs
+    def canonical(p): return re.sub(r"\s+", " ", p.strip()).lower()
+    s1 = [canonical(p) for p in pred_pars]
+    s2 = [canonical(p) for p in gold_pars]
+    # LCS expects exact match of canonical strings; close-but-not-exact paragraphs
+    # will reduce score — acceptable since ground-truth is authoritative.
+    lcs = lcs_length(s1, s2)
+    return lcs / max(1, len(s2))
+
+def serialize_table(table: List[List[str]]) -> str:
+    """
+    Convert a 2D list (table) into a serialized string for similarity checks
+    using \t as column delimiter and \n as row delimiter.
+    """
+    return "\n".join(["\t".join([str(cell) for cell in row]) for row in table])
+
+# ---------------------------
+# Extractor base and helpers
+# ---------------------------
+
+class ExtractResult:
+    def __init__(self):
+        # per slide data
+        self.slides = []  # list of dict: { "slide_idx": int, "paragraphs": [...], "tables": [list-of-rows] }
+        self.raw_text = ""  # whole-document text (concatenated)
+        self.took_seconds = 0.0
+
+class BaseExtractor:
+    name = "base"
+    def extract(self, filepath: str) -> ExtractResult:
+        raise NotImplementedError()
+
+# 1) python-pptx extractor
+class PythonPptxExtractor(BaseExtractor):
+    name = "python-pptx"
+    def extract(self, filepath: str) -> ExtractResult:
+        if Presentation is None:
+            raise RuntimeError("python-pptx not installed")
+        start = time.time()
+        prs = Presentation(filepath)
+        result = ExtractResult()
+        slides_out = []
+        all_texts = []
+        for i, slide in enumerate(prs.slides):
+            slide_pars = []
+            slide_tables = []
+            for shape in slide.shapes:
+                # tables
+                if hasattr(shape, "has_table") and shape.has_table:
+                    tbl = []
+                    table = shape.table
+                    for r in range(len(table.rows)):
+                        row = []
+                        for c in range(len(table.columns)):
+                            cell = table.cell(r, c)
+                            text = cell.text or ""
+                            row.append(text.strip())
+                        tbl.append(row)
+                    slide_tables.append(tbl)
+                # text frames (textboxes, placeholders) - keep paragraphs
+                if hasattr(shape, "text_frame") and shape.text_frame is not None:
+                    # iterate paragraphs
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            slide_pars.append(text)
+                            all_texts.append(text)
+                # NOTE: images are ignored (we do not extract images)
+            slides_out.append({
+                "slide_idx": i,
+                "paragraphs": slide_pars,
+                "tables": slide_tables
+            })
+        result.slides = slides_out
+        result.raw_text = "\n".join(all_texts)
+        result.took_seconds = time.time() - start
+        return result
+
+# 2) Tika extractor (returns XHTML or plain text)
+class TikaExtractor(BaseExtractor):
+    name = "tika"
+    def extract(self, filepath: str) -> ExtractResult:
+        if not TIKA_AVAILABLE:
+            raise RuntimeError("tika-python not installed/available")
+        start = time.time()
+        # tika parser returns dict with 'content' (string) and sometimes 'metadata'
+        parsed = tika_parser.from_file(filepath, xmlContent=True)
+        content = parsed.get("content", "") or ""
+        # If xmlContent=True, content can be an internal XHTML representation.
+        # We will try to parse slide boundaries if present by splitting on <div class="slide"> etc.
+        # Simpler: split by newlines and heuristics to find paragraphs and tables.
+        # For more accurate table extraction, parse XML using BeautifulSoup if HTML-like.
+        from bs4 import BeautifulSoup
+        slides_out = []
+        all_texts = []
+        # Wrap content in soup
+        soup = BeautifulSoup(content or "", "lxml")
+        # Try to find slide containers (common in tika xhtml)
+        slide_divs = soup.find_all(class_=re.compile("slide", re.I))
+        if slide_divs:
+            for i, sdiv in enumerate(slide_divs):
+                pars = [p.get_text(separator=" ", strip=True) for p in sdiv.find_all("p") if p.get_text(strip=True)]
+                # extract tables within this slide
+                tables = []
+                for t in sdiv.find_all("table"):
+                    rows = []
+                    for tr in t.find_all("tr"):
+                        cells = [td.get_text(separator=" ", strip=True) for td in tr.find_all(['td','th'])]
+                        rows.append(cells)
+                    if rows:
+                        tables.append(rows)
+                slides_out.append({"slide_idx": i, "paragraphs": pars, "tables": tables})
+                all_texts.extend(pars)
+        else:
+            # fallback: treat each <p> as paragraph in whole doc
+            pars = [p.get_text(separator=" ", strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
+            slides_out.append({"slide_idx": 0, "paragraphs": pars, "tables": []})
+            all_texts = pars
+        res = ExtractResult()
+        res.slides = slides_out
+        res.raw_text = "\n".join(all_texts)
+        res.took_seconds = time.time() - start
+        return res
+
+# 3) textract extractor (generic)
+class TextractExtractor(BaseExtractor):
+    name = "textract"
+    def extract(self, filepath: str) -> ExtractResult:
+        if not TEXTRACT_AVAILABLE:
+            raise RuntimeError("textract not installed")
+        start = time.time()
+        raw = textract.process(filepath)  # bytes
+        text = raw.decode("utf-8", errors="replace")
+        # textract generally flattens text; no slide boundaries. We will split into paragraphs by blank lines.
+        paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        slides_out = [{"slide_idx": 0, "paragraphs": paras, "tables": []}]
+        res = ExtractResult()
+        res.slides = slides_out
+        res.raw_text = "\n".join(paras)
+        res.took_seconds = time.time() - start
+        return res
+
+# 4) pptx2txt2 extractor (simple wrapper)
+class Pptx2Txt2Extractor(BaseExtractor):
+    name = "pptx2txt2"
+    def extract(self, filepath: str) -> ExtractResult:
+        if not PPTX2TXT2_AVAILABLE:
+            raise RuntimeError("pptx2txt2 not installed")
+        start = time.time()
+        # pptx2txt2 provides simple extraction to text string (and may provide slides)
+        text = pptx2txt2.extract_text(filepath)  # API may differ; adjust if required
+        paras = [p.strip() for p in text.splitlines() if p.strip()]
+        slides_out = [{"slide_idx": 0, "paragraphs": paras, "tables": []}]
+        res = ExtractResult()
+        res.slides = slides_out
+        res.raw_text = "\n".join(paras)
+        res.took_seconds = time.time() - start
+        return res
+
+# ---------------------------
+# Evaluation orchestration
+# ---------------------------
+
+EXTRACTOR_CLASSES = {
+    "python-pptx": PythonPptxExtractor,
+    "tika": TikaExtractor,
+    "textract": TextractExtractor,
+    "pptx2txt2": Pptx2Txt2Extractor
+}
+
+def load_ground_truth(gt_path: str) -> Dict[str, Any]:
+    with open(gt_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def evaluate_one(ground_truth: Dict[str, Any], result: ExtractResult) -> Dict[str, Any]:
+    """
+    Compare result against ground_truth (which follows defined JSON format).
+    Returns aggregated scores.
+    """
+    gt_slides = ground_truth.get("slides", [])
+    # Flatten text
+    gt_all_paras = []
+    for s in gt_slides:
+        gt_all_paras.extend(s.get("paragraphs", []))
+    pred_all_paras = []
+    pred_tables = []
+    for s in result.slides:
+        pred_all_paras.extend(s.get("paragraphs", []))
+        pred_tables.extend(s.get("tables", []))
+    # Text metrics (document-level)
+    pred_text = result.raw_text or ""
+    gt_text = "\n".join(gt_all_paras) or ""
+    lev_sim = normalized_levenshtein_similarity(pred_text, gt_text)
+    p, r, f1 = word_level_f1(pred_text, gt_text)
+    # Paragraph order score (using LCS normalized by gold length)
+    para_order = paragraph_order_score(pred_all_paras, gt_all_paras)
+    # Table score: naively attempt to match tables by serializing them and finding best match
+    gt_tables = []
+    for s in gt_slides:
+        for t in s.get("tables", []):
+            gt_tables.append(t)
+    table_scores = []
+    used_idx = set()
+    for pt in pred_tables:
+        p_ser = serialize_table(pt)
+        best = 0.0
+        best_idx = None
+        for i, gt in enumerate(gt_tables):
+            if i in used_idx:
+                continue
+            gt_ser = serialize_table(gt)
+            sim = normalized_levenshtein_similarity(p_ser, gt_ser)
+            if sim > best:
+                best = sim
+                best_idx = i
+        if best_idx is not None:
+            used_idx.add(best_idx)
+        table_scores.append(best)
+    # If no gt tables, define table_score as 1 if no pred tables else 0
+    if gt_tables:
+        table_score = sum(table_scores) / len(gt_tables) if gt_tables else 0.0
+    else:
+        table_score = 1.0 if not pred_tables else 0.0
+    return {
+        "levenshtein_similarity": lev_sim,
+        "word_precision": p,
+        "word_recall": r,
+        "word_f1": f1,
+        "paragraph_order_score": para_order,
+        "table_score": table_score,
+        "n_gt_paragraphs": len(gt_all_paras),
+        "n_pred_paragraphs": len(pred_all_paras),
+        "n_gt_tables": len(gt_tables),
+        "n_pred_tables": len(pred_tables)
+    }
+
+def run_evaluation(pptx_dir: str, gt_dir: str, out_dir: str, extractors: List[str]):
+    os.makedirs(out_dir, exist_ok=True)
+    # build extractor instances
+    instances = []
+    for e in extractors:
+        cls = EXTRACTOR_CLASSES.get(e)
+        if cls is None:
+            print(f"[WARN] Extractor {e} is unknown, skipping.")
+            continue
+        inst = cls()
+        instances.append(inst)
+
+    # gather pptx files
+    pptx_files = sorted(glob.glob(os.path.join(pptx_dir, "*.pptx")))
+    if not pptx_files:
+        raise RuntimeError("No pptx files found in " + pptx_dir)
+
+    summary_rows = []
+    # iterate files
+    for pptx_path in pptx_files:
+        fname = Path(pptx_path).stem
+        gt_path = os.path.join(gt_dir, fname + ".json")
+        if not os.path.exists(gt_path):
+            print(f"[WARN] No ground truth for {fname} -> skipping accuracy checks (but will still extract).")
+            ground_truth = None
+        else:
+            ground_truth = load_ground_truth(gt_path)
+        for inst in instances:
+            print(f"[INFO] Running extractor {inst.name} on {fname} ...")
+            try:
+                res = inst.extract(pptx_path)
+            except Exception as ex:
+                print(f"[ERROR] extractor {inst.name} failed on {fname}: {ex}")
+                # write failure row
+                summary_rows.append({
+                    "file": fname,
+                    "extractor": inst.name,
+                    "status": "error",
+                    "error": str(ex),
+                })
+                continue
+            metrics = {}
+            if ground_truth:
+                metrics = evaluate_one(ground_truth, res)
+            # write extracted text and tables to out_dir for inspection
+            out_base = os.path.join(out_dir, f"{fname}__{inst.name}")
+            os.makedirs(out_base, exist_ok=True)
+            # raw text
+            text_file = os.path.join(out_base, "extracted.txt")
+            with open(text_file, "w", encoding="utf-8") as f:
+                f.write(res.raw_text)
+            # slide-by-slide JSON
+            slide_file = os.path.join(out_base, "slides.json")
+            with open(slide_file, "w", encoding="utf-8") as f:
+                json.dump({"slides": res.slides}, f, ensure_ascii=False, indent=2)
+            # if pandas available, create CSVs for tables
+            if PANDAS_AVAILABLE:
+                for i, s in enumerate(res.slides):
+                    for ti, tbl in enumerate(s.get("tables", [])):
+                        df = pd.DataFrame(tbl)
+                        csvp = os.path.join(out_base, f"slide_{i}_table_{ti}.csv")
+                        df.to_csv(csvp, index=False, header=False)
+            # add summary row
+            row = {
+                "file": fname,
+                "extractor": inst.name,
+                "status": "ok",
+                "time_seconds": res.took_seconds
+            }
+            row.update(metrics)
+            summary_rows.append(row)
+
+    # write summary CSV
+    summary_csv = os.path.join(out_dir, "summary.csv")
+    keys = set()
+    for r in summary_rows:
+        keys.update(r.keys())
+    keys = sorted(keys)
+    with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        for r in summary_rows:
+            writer.writerow(r)
+    # write summary JSON
+    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(summary_rows, f, ensure_ascii=False, indent=2)
+    print(f"[DONE] Results saved to {out_dir}. Summary CSV: {summary_csv}")
+
+# ---------------------------
+# CLI
+# ---------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Compare PPTX extractors.")
+    p.add_argument("--pptx-dir", required=True, help="Directory with .pptx files")
+    p.add_argument("--gt-dir", required=True, help="Directory with ground truth .json files (same base names)")
+    p.add_argument("--out-dir", required=True, help="Output directory for extracted files and summary")
+    p.add_argument("--extractors", default="python-pptx,tika,textract",
+                   help="Comma-separated extractor names (supported: python-pptx,tika,textract,pptx2txt2)")
+    return p.parse_args()
+
+def main():
+    args = parse_args()
+    extractors = [e.strip() for e in args.extractors.split(",") if e.strip()]
+    run_evaluation(args.pptx_dir, args.gt_dir, args.out_dir, extractors)
+
+if __name__ == "__main__":
+    main()
+
+_____________________________________
+
+import os
+import time
+import pandas as pd
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+# Install other libraries if needed
+# !pip install python-pptx pptx2pdf pypptx2txt pdfplumber pptx2text
+
+# Function 1: python-pptx
+def extract_text_python_pptx(file_path):
+    start_time = time.time()
+    prs = Presentation(file_path)
+    text_runs = []
+    
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            # Extract text (excluding images)
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text_runs.append(para.text.strip())
+            # Extract tables
+            elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                for row in shape.table.rows:
+                    row_text = "\t".join([cell.text.strip() for cell in row.cells])
+                    text_runs.append(row_text)
+                    
+    text = "\n".join([t for t in text_runs if t])
+    end_time = time.time()
+    return text, end_time - start_time
+
+
+# Function 2: pptx2txt (if available)
+try:
+    import pptx2txt
+
+    def extract_text_pptx2txt(file_path):
+        start_time = time.time()
+        text = pptx2txt.get_text(file_path)
+        end_time = time.time()
+        return text, end_time - start_time
+except ImportError:
+    def extract_text_pptx2txt(file_path):
+        return "pptx2txt not installed", 0
+
+
+# Function 3: aspose-py (commercial but good for accuracy, if available)
+try:
+    import aspose.slides as slides
+
+    def extract_text_aspose(file_path):
+        start_time = time.time()
+        text_runs = []
+        with slides.Presentation(file_path) as presentation:
+            for slide in presentation.slides:
+                for shape in slide.shapes:
+                    if shape.text_frame is not None:
+                        for para in shape.text_frame.paragraphs:
+                            text_runs.append(para.text)
+                    elif shape.is_table:
+                        table = shape
+                        for row in range(table.rows_count):
+                            row_text = "\t".join([
+                                table.get_cell(row, col).text_frame.text
+                                for col in range(table.columns_count)
+                            ])
+                            text_runs.append(row_text)
+        text = "\n".join(text_runs)
+        end_time = time.time()
+        return text, end_time - start_time
+except ImportError:
+    def extract_text_aspose(file_path):
+        return "Aspose not installed", 0
+
+
+# --- Utility functions ---
+
+def evaluate_text_order(extracted_text):
+    """
+    A heuristic to check if text order is natural.
+    - 'best' if lines have structure and logical flow (multiple paragraphs, minimal jumble)
+    - 'good' if mostly ordered but some lines look scattered
+    - 'bad' if lines are fragmented or single words per line
+    """
+    lines = [line for line in extracted_text.split("\n") if line.strip()]
+    avg_len = sum(len(l.split()) for l in lines) / len(lines) if lines else 0
+    if avg_len > 8 and len(lines) > 5:
+        return "best"
+    elif avg_len > 4:
+        return "good"
+    else:
+        return "bad"
+
+
+def summarize_results(file_path):
+    """
+    Runs all extractors and summarizes their performance and quality.
+    """
+    methods = {
+        "python-pptx": extract_text_python_pptx,
+        "pptx2txt": extract_text_pptx2txt,
+        "aspose-slides": extract_text_aspose,
+    }
+
+    results = []
+    for name, func in methods.items():
+        print(f"Running {name}...")
+        text, t = func(file_path)
+
+        if "not installed" in str(text):
+            accuracy = "N/A"
+            text_quality = "N/A"
+        else:
+            text_quality = evaluate_text_order(text)
+            # Heuristic: accuracy = longer text length means better completeness
+            accuracy = len(text.split())
+
+        results.append({
+            "Library": name,
+            "Time Taken (sec)": round(t, 3),
+            "Text Length (words)": accuracy if accuracy != "N/A" else 0,
+            "Text Order Quality": text_quality,
+        })
+
+    df = pd.DataFrame(results)
+    return df
+
+
+# --- Run for a sample file ---
+file_path = "your_pptx_file.pptx"  # <-- Replace with your pptx file path
+
+summary_df = summarize_results(file_path)
+summary_df
