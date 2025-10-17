@@ -1,0 +1,178 @@
+import os
+import time
+import fitz  # PyMuPDF
+import tempfile
+import pandas as pd
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pathlib import Path
+import subprocess
+
+# -------------------------------------------
+# Extraction Functions
+# -------------------------------------------
+
+def extract_text_python_pptx(file_path):
+    """Extract text and tables using python-pptx"""
+    start_time = time.time()
+    prs = Presentation(file_path)
+    slides_data = []
+    for i, slide in enumerate(prs.slides, start=1):
+        text_runs = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text_runs.append(para.text.strip())
+            elif shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+                for row in shape.table.rows:
+                    row_text = "\t".join([cell.text.strip() for cell in row.cells])
+                    text_runs.append(row_text)
+        slides_data.append({"Slide": i, "Text": "\n".join(text_runs)})
+    end_time = time.time()
+    return slides_data, end_time - start_time
+
+
+def extract_text_pymupdf(file_path):
+    """Convert PPTX to PDF then extract text using PyMuPDF"""
+    start_time = time.time()
+    temp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
+
+    # Convert PPTX to PDF using soffice (LibreOffice)
+    try:
+        subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", tempfile.gettempdir(), file_path],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    except Exception as e:
+        raise RuntimeError("LibreOffice conversion failed: " + str(e))
+
+    # Extract text from PDF
+    slides_data = []
+    doc = fitz.open(temp_pdf)
+    for i, page in enumerate(doc, start=1):
+        text = page.get_text("text")
+        slides_data.append({"Slide": i, "Text": text})
+    doc.close()
+    os.remove(temp_pdf)
+    end_time = time.time()
+    return slides_data, end_time - start_time
+
+
+# Windows-only extractor
+def extract_text_win32(file_path):
+    """Extract text using PowerPoint COM automation (Windows only)"""
+    try:
+        import win32com.client
+    except ImportError:
+        raise ImportError("win32com.client not installed or not on Windows")
+
+    start_time = time.time()
+    powerpoint = win32com.client.Dispatch("PowerPoint.Application")
+    presentation = powerpoint.Presentations.Open(file_path, WithWindow=False)
+    slides_data = []
+    for i, slide in enumerate(presentation.Slides, start=1):
+        text = ""
+        for shape in slide.Shapes:
+            if shape.HasTextFrame:
+                text += shape.TextFrame.TextRange.Text + "\n"
+        slides_data.append({"Slide": i, "Text": text})
+    presentation.Close()
+    powerpoint.Quit()
+    end_time = time.time()
+    return slides_data, end_time - start_time
+
+
+# -------------------------------------------
+# Quality Evaluation
+# -------------------------------------------
+
+def evaluate_text_order(extracted_text):
+    lines = [line for line in extracted_text.split("\n") if line.strip()]
+    avg_len = sum(len(l.split()) for l in lines) / len(lines) if lines else 0
+    if avg_len > 8 and len(lines) > 5:
+        return "best"
+    elif avg_len > 4:
+        return "good"
+    else:
+        return "bad"
+
+
+# -------------------------------------------
+# Main Benchmark Function
+# -------------------------------------------
+
+def process_all_pptx(folder_path, output_excel="pptx_extraction_comparison.xlsx"):
+    methods = {
+        "python-pptx": extract_text_python_pptx,
+        "PyMuPDF": extract_text_pymupdf,
+        "Win32COM": extract_text_win32  # optional
+    }
+
+    ppt_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pptx")]
+    if not ppt_files:
+        print("No PPTX files found in folder.")
+        return
+
+    all_results, all_times, errors, accuracy_data = {}, {}, [], []
+
+    for method_name, extractor in methods.items():
+        print(f"\n=== Running {method_name} ===")
+        method_results, method_times = [], []
+
+        for file_name in ppt_files:
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                slides_data, duration = extractor(file_path)
+                df = pd.DataFrame(slides_data)
+                df.insert(0, "File Name", file_name)
+                method_results.append(df)
+                method_times.append({
+                    "File Name": file_name,
+                    "Time Taken (sec)": round(duration, 3)
+                })
+
+                all_text = "\n".join(df["Text"].fillna(""))
+                accuracy_data.append({
+                    "File Name": file_name,
+                    "Library": method_name,
+                    "Word Count": len(all_text.split()),
+                    "Text Order Quality": evaluate_text_order(all_text)
+                })
+
+            except Exception as e:
+                print(f"❌ Error in {method_name} - {file_name}: {e}")
+                errors.append({"Library": method_name, "File Name": file_name, "Error": str(e)})
+
+        if method_results:
+            all_results[method_name] = pd.concat(method_results, ignore_index=True)
+        if method_times:
+            all_times[method_name] = pd.DataFrame(method_times)
+
+    # Summary
+    summary = pd.DataFrame([
+        {
+            "Library": lib,
+            "Files Processed": len(all_results.get(lib, [])),
+            "Total Time (sec)": all_times[lib]["Time Taken (sec)"].sum() if lib in all_times else 0,
+            "Avg Time/File (sec)": all_times[lib]["Time Taken (sec)"].mean() if lib in all_times else 0
+        }
+        for lib in methods.keys()
+    ])
+
+    # Write all sheets to Excel
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+        for lib, df in all_results.items():
+            df.to_excel(writer, sheet_name=f"{lib}_Text", index=False)
+        for lib, df in all_times.items():
+            df.to_excel(writer, sheet_name=f"{lib}_Time", index=False)
+        if errors:
+            pd.DataFrame(errors).to_excel(writer, sheet_name="Errors", index=False)
+        pd.DataFrame(accuracy_data).to_excel(writer, sheet_name="Accuracy", index=False)
+        summary.to_excel(writer, sheet_name="Summary", index=False)
+
+    print(f"\n✅ All done! Results saved to: {output_excel}")
+
+
+# -------------------------------------------
+# Run
+# -------------------------------------------
+folder_path = "path_to_your_ppt_folder"  # 🔹 replace with your PPTX folder path
+process_all_pptx(folder_path)
