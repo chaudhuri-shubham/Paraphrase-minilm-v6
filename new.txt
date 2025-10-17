@@ -176,3 +176,594 @@ def process_all_pptx(folder_path, output_excel="pptx_extraction_comparison.xlsx"
 # -------------------------------------------
 folder_path = "path_to_your_ppt_folder"  # 🔹 replace with your PPTX folder path
 process_all_pptx(folder_path)
+
+______________________________________________????
+
+
+# Jupyter-ready PPTX extraction & evaluation pipeline
+# Paste this whole cell into Jupyter and run.
+# Edit only CONFIG below to point to your pptx folder and optional ground-truth folder.
+
+import os
+import time
+import json
+import math
+import tempfile
+import subprocess
+from pathlib import Path
+from collections import Counter
+from typing import List, Dict, Any, Tuple
+
+import pandas as pd
+import numpy as np
+
+# Optional imports (we attempt to import but will skip gracefully if missing)
+try:
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+except Exception:
+    Presentation = None
+    MSO_SHAPE_TYPE = None
+
+try:
+    import textract
+except Exception:
+    textract = None
+
+try:
+    from tika import parser as tika_parser
+    TIKA_AVAILABLE = True
+except Exception:
+    tika_parser = None
+    TIKA_AVAILABLE = False
+
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except Exception:
+    fitz = None
+    PYMUPDF_AVAILABLE = False
+
+# win32com optional (windows)
+try:
+    import win32com.client
+    WIN32_AVAILABLE = True
+except Exception:
+    win32com = None
+    WIN32_AVAILABLE = False
+
+# BeautifulSoup for parsing Tika XHTML
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except Exception:
+    BeautifulSoup = None
+    BS4_AVAILABLE = False
+
+# ------------- CONFIG -------------
+PPTX_FOLDER = "path_to_your_pptx_folder"        # <-- change to your folder
+OUTPUT_EXCEL = "pptx_extraction_report.xlsx"   # final workbook name
+GROUND_TRUTH_FOLDER = None                     # <-- set to folder path with ground-truth JSONs or None
+ENABLED_EXTRACTORS = ["python-pptx", "textract", "tika", "pymupdf", "win32com"]
+# Notes:
+# - Remove "tika" if you don't have Java/tika; code attempts to handle missing modules.
+# - "pymupdf" requires LibreOffice 'soffice' to convert pptx->pdf (must be in PATH).
+# - "win32com" only works on Windows and if pywin32 is installed.
+
+# ------------- Utilities & Metrics -------------
+def safe_print(*a, **k):
+    print(*a, **k)
+
+def levenshtein(s1: str, s2: str) -> int:
+    if s1 == s2:
+        return 0
+    if len(s1) == 0:
+        return len(s2)
+    if len(s2) == 0:
+        return len(s1)
+    a, b = s1, s2
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            cur[j] = min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + cost)
+        prev = cur
+    return prev[-1]
+
+def normalized_levenshtein_similarity(s1: str, s2: str) -> float:
+    if not s1 and not s2:
+        return 1.0
+    dist = levenshtein(s1, s2)
+    maxlen = max(len(s1), len(s2))
+    return 1.0 - (dist / maxlen) if maxlen > 0 else 1.0
+
+import re
+def word_tokens(text: str) -> List[str]:
+    return re.findall(r"\w+", (text or "").lower())
+
+def word_level_f1(pred: str, gold: str) -> Tuple[float,float,float]:
+    p_tokens = word_tokens(pred)
+    g_tokens = word_tokens(gold)
+    if not p_tokens and not g_tokens:
+        return 1.0,1.0,1.0
+    pc = Counter(p_tokens); gc = Counter(g_tokens)
+    matches = sum((pc & gc).values())
+    precision = matches / (sum(pc.values()) or 1)
+    recall = matches / (sum(gc.values()) or 1)
+    f1 = (2*precision*recall/(precision+recall)) if (precision+recall)>0 else 0.0
+    return precision, recall, f1
+
+# LCS based paragraph order score
+def lcs_length(seq1: List[str], seq2: List[str]) -> int:
+    n, m = len(seq1), len(seq2)
+    if n==0 or m==0:
+        return 0
+    dp = [[0]*(m+1) for _ in range(n+1)]
+    for i in range(n-1, -1, -1):
+        for j in range(m-1, -1, -1):
+            if seq1[i]==seq2[j]:
+                dp[i][j]=1+dp[i+1][j+1]
+            else:
+                dp[i][j]=max(dp[i+1][j], dp[i][j+1])
+    return dp[0][0]
+
+def paragraph_order_score(pred_pars: List[str], gold_pars: List[str]) -> float:
+    if not gold_pars:
+        return 1.0 if not pred_pars else 0.0
+    def can(p): return re.sub(r"\s+"," ", (p or "").strip()).lower()
+    s1 = [can(p) for p in pred_pars]
+    s2 = [can(p) for p in gold_pars]
+    lcs = lcs_length(s1, s2)
+    return lcs / max(1, len(s2))
+
+# ---------- Helpers to analyze reading order ----------
+from scipy.stats import spearmanr
+
+def rank_by_row_then_col(blocks: List[Dict[str,float]]) -> List[int]:
+    # sort by top (y), then by left (x)
+    ordered = sorted(range(len(blocks)), key=lambda i: (blocks[i]['top'], blocks[i]['left']))
+    return ordered
+
+def rank_by_col_then_row(blocks: List[Dict[str,float]]) -> List[int]:
+    ordered = sorted(range(len(blocks)), key=lambda i: (blocks[i]['left'], blocks[i]['top']))
+    return ordered
+
+def compute_orientation(extracted_order: List[int], blocks: List[Dict[str,float]]) -> str:
+    """
+    extracted_order: list of indices in the order extractor returned (0..n-1)
+    blocks: list of dicts with 'left','top' coords for each block in the expected visual order
+    Returns: 'row-wise' or 'column-wise' or 'random' or 'unknown'
+    """
+    if not blocks or not extracted_order:
+        return "unknown"
+    try:
+        # natural orders
+        row_order = rank_by_row_then_col(blocks)
+        col_order = rank_by_col_then_row(blocks)
+        # compute Spearman correlation between ranks
+        # map extracted_order (which lists indices in extractor order) to rank positions
+        # build sequence of positions according to extracted order: position_in_row_order for each extracted item
+        pos_in_row = {idx:pos for pos,idx in enumerate(row_order)}
+        pos_in_col = {idx:pos for pos,idx in enumerate(col_order)}
+        seq_row = [pos_in_row.get(idx, -1) for idx in extracted_order]
+        seq_col = [pos_in_col.get(idx, -1) for idx in extracted_order]
+        # filter -1
+        if any(v<0 for v in seq_row) or any(v<0 for v in seq_col):
+            return "unknown"
+        rho_row, _ = spearmanr(list(range(len(seq_row))), seq_row)
+        rho_col, _ = spearmanr(list(range(len(seq_col))), seq_col)
+        # choose best
+        rho_row = 0.0 if math.isnan(rho_row) else rho_row
+        rho_col = 0.0 if math.isnan(rho_col) else rho_col
+        if rho_row >= 0.85 and rho_row > rho_col:
+            return "row-wise"
+        if rho_col >= 0.85 and rho_col > rho_row:
+            return "column-wise"
+        return "random"
+    except Exception as e:
+        return "unknown"
+
+# ---------- Ground-truth loader (optional) ----------
+def load_ground_truth(gt_folder: str, base_name: str) -> Dict[str,Any]:
+    """Load ground truth JSON if exists. Expect format described previously."""
+    if not gt_folder:
+        return None
+    path = os.path.join(gt_folder, base_name + ".json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+# ---------- Extractors ----------
+# Each extractor returns:
+#   slides: List[{"slide_idx": int, "paragraphs": List[str], "tables": List[List[List[str]]], "blocks": List[{"text":..., "left":..., "top":...}] }]
+#   took_seconds: float
+# blocks are optional; include if we can provide coordinates to analyze orientation.
+
+def extractor_python_pptx(filepath: str) -> Tuple[List[Dict[str,Any]], float]:
+    if Presentation is None:
+        raise RuntimeError("python-pptx not installed")
+    start = time.time()
+    prs = Presentation(filepath)
+    slides_out = []
+    for si, slide in enumerate(prs.slides):
+        pars = []
+        tables = []
+        blocks = []
+        # We'll record approximate left/top for each shape-derived block
+        for shape in slide.shapes:
+            left = getattr(shape, "left", None)
+            top = getattr(shape, "top", None)
+            if hasattr(shape, "has_table") and shape.has_table:
+                tbl = []
+                for r in range(len(shape.table.rows)):
+                    row = []
+                    for c in range(len(shape.table.columns)):
+                        cell_text = shape.table.cell(r, c).text or ""
+                        row.append(cell_text.strip())
+                    tbl.append(row)
+                tables.append(tbl)
+                # Represent table as a block
+                blocks.append({"text": serialize_table(tbl), "left": left if left is not None else 0, "top": top if top is not None else 0})
+            if hasattr(shape, "text_frame") and shape.text_frame is not None:
+                for para in shape.text_frame.paragraphs:
+                    txt = para.text.strip()
+                    if txt:
+                        pars.append(txt)
+                        # block with coordinates for this para
+                        blocks.append({"text":txt, "left": left if left is not None else 0, "top": top if top is not None else 0})
+        slides_out.append({"slide_idx": si, "paragraphs": pars, "tables": tables, "blocks": blocks})
+    took = time.time()-start
+    return slides_out, took
+
+def serialize_table(table: List[List[str]]) -> str:
+    return "\n".join("\t".join(str(cell) for cell in row) for row in table)
+
+def extractor_textract(filepath: str) -> Tuple[List[Dict[str,Any]], float]:
+    if textract is None:
+        raise RuntimeError("textract not installed")
+    start = time.time()
+    raw = textract.process(filepath)
+    text = raw.decode("utf-8", errors="replace")
+    # textract flattens - no slide boundaries; we'll split by form feed or double newlines heuristics
+    parts = [p.strip() for p in re.split(r"\f+|\n\s*\n", text) if p.strip()]
+    slides_out = []
+    for i, p in enumerate(parts):
+        # no table detection here
+        slides_out.append({"slide_idx": i, "paragraphs": [p], "tables": [], "blocks": [{"text": p, "left": 0, "top": i}]})
+    took = time.time()-start
+    return slides_out, took
+
+def extractor_tika(filepath: str) -> Tuple[List[Dict[str,Any]], float]:
+    if not TIKA_AVAILABLE:
+        raise RuntimeError("tika not installed")
+    start = time.time()
+    parsed = tika_parser.from_file(filepath, xmlContent=True)
+    content = parsed.get("content", "") or ""
+    slides_out=[]
+    if content and BS4_AVAILABLE:
+        soup = BeautifulSoup(content, "lxml")
+        # Try to find slide blocks; fallback to <p> groups
+        slide_divs = soup.find_all(class_=re.compile("slide", re.I))
+        if slide_divs:
+            for si, sdiv in enumerate(slide_divs):
+                pars = [p.get_text(separator=" ", strip=True) for p in sdiv.find_all("p") if p.get_text(strip=True)]
+                tables=[]
+                for t in sdiv.find_all("table"):
+                    rows=[]
+                    for tr in t.find_all("tr"):
+                        cells=[td.get_text(separator=" ", strip=True) for td in tr.find_all(['td','th'])]
+                        rows.append(cells)
+                    if rows:
+                        tables.append(rows)
+                # Tika doesn't provide coordinates here; we set 0
+                blocks = [{"text":p,"left":0,"top":idx} for idx,p in enumerate(pars)]
+                slides_out.append({"slide_idx": si, "paragraphs": pars, "tables": tables, "blocks": blocks})
+        else:
+            pars=[p.get_text(separator=" ", strip=True) for p in soup.find_all("p") if p.get_text(strip=True)]
+            blocks=[{"text":p,"left":0,"top":i} for i,p in enumerate(pars)]
+            slides_out.append({"slide_idx":0,"paragraphs":pars,"tables":[],"blocks":blocks})
+    else:
+        # fallback to plain text split
+        parts = [p.strip() for p in re.split(r"\f+|\n\s*\n", content or "") if p.strip()]
+        for i,p in enumerate(parts):
+            slides_out.append({"slide_idx":i,"paragraphs":[p],"tables":[],"blocks":[{"text":p,"left":0,"top":i}]})
+    took=time.time()-start
+    return slides_out, took
+
+def extractor_pymupdf(filepath: str) -> Tuple[List[Dict[str,Any]], float]:
+    if not PYMUPDF_AVAILABLE:
+        raise RuntimeError("PyMuPDF (fitz) not installed")
+    # Convert pptx -> pdf using soffice (LibreOffice). Output goes to tempdir
+    start = time.time()
+    tmpdir = tempfile.gettempdir()
+    # Convert
+    try:
+        subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmpdir, filepath],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    except Exception as e:
+        raise RuntimeError("LibreOffice conversion (soffice) failed: " + str(e))
+    pdf_path = os.path.join(tmpdir, Path(filepath).with_suffix(".pdf").name)
+    if not os.path.exists(pdf_path):
+        raise RuntimeError("Converted PDF not found: " + pdf_path)
+    slides_out=[]
+    doc = fitz.open(pdf_path)
+    for pi, page in enumerate(doc):
+        # get blocks with bbox - each block is (x0,y0,x1,y1,"text", block_no)
+        blocks_raw = page.get_text("blocks")
+        blocks=[]
+        paragraphs=[]
+        for b in blocks_raw:
+            x0,y0,x1,y1,txt = b[0], b[1], b[2], b[3], b[4]
+            txt = txt.strip()
+            if not txt:
+                continue
+            paragraphs.append(txt)
+            blocks.append({"text":txt,"left":x0,"top":y0,"right":x1,"bottom":y1})
+        slides_out.append({"slide_idx":pi,"paragraphs":paragraphs,"tables":[],"blocks":blocks})
+    doc.close()
+    # cleanup pdf
+    try:
+        os.remove(pdf_path)
+    except Exception:
+        pass
+    took = time.time()-start
+    return slides_out, took
+
+def extractor_win32com(filepath: str) -> Tuple[List[Dict[str,Any]], float]:
+    if not WIN32_AVAILABLE:
+        raise RuntimeError("win32com not available / not on Windows")
+    start = time.time()
+    ppt_app = win32com.client.Dispatch("PowerPoint.Application")
+    presentation = ppt_app.Presentations.Open(os.path.abspath(filepath), WithWindow=False)
+    slides_out=[]
+    for i, slide in enumerate(presentation.Slides, start=0):
+        pars=[]
+        blocks=[]
+        # shapes can be iterated
+        for shape in slide.Shapes:
+            try:
+                if shape.HasTextFrame:
+                    text = shape.TextFrame.TextRange.Text
+                    if text:
+                        # basic split by newline into paras
+                        for p in str(text).splitlines():
+                            p = p.strip()
+                            if p:
+                                pars.append(p)
+                                # coordinates (Left, Top) are available
+                                left = getattr(shape, "Left", 0)
+                                top = getattr(shape, "Top", 0)
+                                blocks.append({"text":p,"left":left,"top":top})
+            except Exception:
+                continue
+        slides_out.append({"slide_idx":i,"paragraphs":pars,"tables":[],"blocks":blocks})
+    presentation.Close()
+    ppt_app.Quit()
+    took = time.time()-start
+    return slides_out, took
+
+# Map name->function
+EXTRACTOR_MAP = {
+    "python-pptx": extractor_python_pptx,
+    "textract": extractor_textract,
+    "tika": extractor_tika,
+    "pymupdf": extractor_pymupdf,
+    "win32com": extractor_win32com
+}
+
+# ---------- Orchestration ----------
+def process_folder(pptx_folder: str,
+                   enabled_extractors: List[str],
+                   out_excel: str,
+                   gt_folder: str = None):
+    files = [f for f in os.listdir(pptx_folder) if f.lower().endswith(".pptx")]
+    if not files:
+        raise RuntimeError("No .pptx files found in folder: " + pptx_folder)
+
+    # Data collectors
+    sheet_text = {}      # extractor -> DataFrame with columns: File Name | Slide | Extracted Text
+    sheet_time = {}      # extractor -> DataFrame with columns: File Name | Time Taken (s)
+    error_rows = []      # list of dicts
+    accuracy_rows = []   # if GT present
+    orientation_rows = []  # extractor,file -> orientation
+    extra_metrics = []   # other metrics per file/extractor
+    summary_rows = []
+    
+    for ext in enabled_extractors:
+        if ext not in EXTRACTOR_MAP:
+            safe_print(f"[WARN] extractor {ext} is unknown, skipping.")
+            continue
+        func = EXTRACTOR_MAP[ext]
+        safe_print(f"\n=== Running extractor: {ext} ===")
+        text_rows = []
+        time_rows = []
+        per_file_metrics = []
+        for fname in files:
+            fpath = os.path.join(pptx_folder, fname)
+            base = Path(fname).stem
+            try:
+                slides_out, took = func(fpath)
+                # slide-wise write
+                for s in slides_out:
+                    slide_idx = s.get("slide_idx", 0)
+                    pars = s.get("paragraphs", []) or []
+                    # preserve paragraph separation with \n
+                    text = "\n\n".join(pars) if pars else ""
+                    text_rows.append({"File Name": fname, "Slide": slide_idx+1, "Extracted Text": text})
+                time_rows.append({"File Name": fname, "Time Taken (sec)": round(took,3)})
+                # Orientation detection per slide (aggregate to file-level by majority)
+                orients = []
+                for s in slides_out:
+                    blocks = s.get("blocks", [])
+                    # extracted order is natural order of blocks as they appear in blocks list
+                    extracted_order = list(range(len(blocks)))
+                    # compute orientation
+                    if blocks:
+                        # normalize blocks to have left/top floats
+                        norm_blocks = []
+                        for b in blocks:
+                            left = float(b.get("left", 0) or 0)
+                            top = float(b.get("top", 0) or 0)
+                            norm_blocks.append({"left":left,"top":top})
+                        orient = compute_orientation(extracted_order, norm_blocks)
+                    else:
+                        orient = "unknown"
+                    orients.append(orient)
+                # majority orientation
+                orient_counts = Counter(orients)
+                file_orient = orient_counts.most_common(1)[0][0] if orient_counts else "unknown"
+                orientation_rows.append({"Extractor": ext, "File Name": fname, "Orientation": file_orient})
+                # slide/paragraph/table metrics
+                n_pars = sum(len(s.get("paragraphs", [])) for s in slides_out)
+                n_tables = sum(len(s.get("tables", [])) for s in slides_out)
+                avg_par_len = np.mean([len(p.split()) for s in slides_out for p in s.get("paragraphs",[])]) if n_pars>0 else 0
+                slide_boundary_preserved = (len(slides_out) > 1)
+                extra_metrics.append({
+                    "Extractor": ext, "File Name": fname,
+                    "n_slides_extracted": len(slides_out),
+                    "n_paragraphs": n_pars,
+                    "n_tables": n_tables,
+                    "avg_paragraph_length_words": round(avg_par_len,2),
+                    "preserves_slide_boundary": slide_boundary_preserved
+                })
+                # If ground truth is provided, compute accuracy metrics
+                gt = load_ground_truth(gt_folder, base) if gt_folder else None
+                if gt:
+                    # flatten ground truth paragraphs
+                    gt_pars = []
+                    for s in gt.get("slides", []):
+                        gt_pars.extend(s.get("paragraphs", []))
+                    pred_text = "\n".join([s.get("paragraphs","") and "\n".join(s.get("paragraphs")) or "" for s in slides_out])
+                    gt_text = "\n".join(gt_pars)
+                    lev_sim = normalized_levenshtein_similarity(pred_text, gt_text)
+                    p, r, f1 = word_level_f1(pred_text, gt_text)
+                    para_order = paragraph_order_score([p for s in slides_out for p in s.get("paragraphs",[])], gt_pars)
+                    # table score: naive best-match serialized table
+                    gt_tables=[]
+                    for s in gt.get("slides", []):
+                        for t in s.get("tables", []):
+                            gt_tables.append(t)
+                    pred_tables=[]
+                    for s in slides_out:
+                        for t in s.get("tables", []):
+                            pred_tables.append(t)
+                    table_scores=[]
+                    used=set()
+                    for pt in pred_tables:
+                        ser = serialize_table(pt)
+                        best=0; best_idx=None
+                        for i,gt_tbl in enumerate(gt_tables):
+                            if i in used: continue
+                            sim = normalized_levenshtein_similarity(ser, serialize_table(gt_tbl))
+                            if sim>best:
+                                best=sim; best_idx=i
+                        if best_idx is not None: used.add(best_idx)
+                        table_scores.append(best)
+                    table_score = (sum(table_scores)/len(gt_tables)) if gt_tables else (1.0 if not pred_tables else 0.0)
+                    accuracy_rows.append({
+                        "Extractor": ext, "File Name": fname,
+                        "levenshtein_similarity": round(lev_sim,3),
+                        "word_precision": round(p,3),
+                        "word_recall": round(r,3),
+                        "word_f1": round(f1,3),
+                        "paragraph_order_score": round(para_order,3),
+                        "table_score": round(table_score,3),
+                        "n_gt_paragraphs": len(gt_pars),
+                        "n_pred_paragraphs": n_pars,
+                        "n_gt_tables": len(gt_tables),
+                        "n_pred_tables": len(pred_tables)
+                    })
+            except Exception as e:
+                safe_print(f"[ERROR] extractor={ext} file={fname} -> {e}")
+                error_rows.append({"Extractor": ext, "File Name": fname, "Error": str(e)})
+        # aggregate dfs
+        if text_rows:
+            sheet_text[ext] = pd.DataFrame(text_rows)
+        if time_rows:
+            sheet_time[ext] = pd.DataFrame(time_rows)
+        # summary per extractor
+        total_files = len(files) - sum(1 for er in error_rows if er['Extractor']==ext)
+        total_time = sheet_time[ext]["Time Taken (sec)"].sum() if ext in sheet_time else 0
+        avg_time = sheet_time[ext]["Time Taken (sec)"].mean() if ext in sheet_time else 0
+        summary_rows.append({
+            "Extractor": ext,
+            "Files Found": len(files),
+            "Files Processed": int(total_files),
+            "Total Time (sec)": round(float(total_time),3) if total_time else 0,
+            "Avg Time per File (sec)": round(float(avg_time),3) if avg_time else 0
+        })
+
+    # Write Excel workbook with required sheet layout
+    safe_print("\nWriting Excel workbook...")
+    with pd.ExcelWriter(out_excel, engine="openpyxl") as writer:
+        # per-extractor text sheets
+        for ext, df in sheet_text.items():
+            # multi-index: File Name then Slide
+            df_sorted = df.sort_values(["File Name","Slide"])
+            # use sheet name safe
+            sheet_name = (ext[:25] + "_Text") if len(ext)>25 else (ext + "_Text")
+            df_sorted.to_excel(writer, sheet_name=sheet_name, index=False)
+        # per-extractor time sheets
+        for ext, df in sheet_time.items():
+            sheet_name = (ext[:25] + "_Time") if len(ext)>25 else (ext + "_Time")
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+        # errors
+        if error_rows:
+            pd.DataFrame(error_rows).to_excel(writer, sheet_name="Errors", index=False)
+        else:
+            pd.DataFrame([], columns=["Extractor","File Name","Error"]).to_excel(writer, sheet_name="Errors", index=False)
+        # accuracy
+        if accuracy_rows:
+            pd.DataFrame(accuracy_rows).to_excel(writer, sheet_name="Accuracy", index=False)
+        else:
+            pd.DataFrame([], columns=["Extractor","File Name"]).to_excel(writer, sheet_name="Accuracy", index=False)
+        # orientation matrix
+        if orientation_rows:
+            pd.DataFrame(orientation_rows).to_excel(writer, sheet_name="Extraction_Orientation", index=False)
+        else:
+            pd.DataFrame([], columns=["Extractor","File Name","Orientation"]).to_excel(writer, sheet_name="Extraction_Orientation", index=False)
+        # extra metrics
+        if extra_metrics:
+            pd.DataFrame(extra_metrics).to_excel(writer, sheet_name="Extraction_Metrics", index=False)
+        else:
+            pd.DataFrame([], columns=["Extractor","File Name"]).to_excel(writer, sheet_name="Extraction_Metrics", index=False)
+        # summary
+        pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Summary", index=False)
+    safe_print("Excel saved to", out_excel)
+    safe_print("Done.")
+
+# ---------- Run pipeline ----------
+# Create output folder if needed, check config
+if not os.path.isdir(PPTX_FOLDER):
+    raise RuntimeError(f"PPTX_FOLDER path does not exist or is not a folder: {PPTX_FOLDER}")
+
+# Filter enabled extractors by availability
+enabled = []
+for e in ENABLED_EXTRACTORS:
+    if e not in EXTRACTOR_MAP:
+        safe_print(f"[WARN] extractor {e} not recognized - skipping")
+        continue
+    # quick availability checks
+    if e=="python-pptx" and Presentation is None:
+        safe_print("[WARN] python-pptx not installed - skipping python-pptx")
+        continue
+    if e=="textract" and textract is None:
+        safe_print("[WARN] textract not installed - skipping textract")
+        continue
+    if e=="tika" and not TIKA_AVAILABLE:
+        safe_print("[WARN] tika not available - skipping tika")
+        continue
+    if e=="pymupdf" and not PYMUPDF_AVAILABLE:
+        safe_print("[WARN] PyMuPDF not installed - skipping pymupdf")
+        continue
+    if e=="win32com" and not WIN32_AVAILABLE:
+        safe_print("[WARN] win32com not available (not windows or pywin32 missing) - skipping win32com")
+        continue
+    enabled.append(e)
+
+if not enabled:
+    raise RuntimeError("No enabled extractors available. Install packages or enable others in CONFIG.")
+
+process_folder(PPTX_FOLDER, enabled, OUTPUT_EXCEL, GROUND_TRUTH_FOLDER)
