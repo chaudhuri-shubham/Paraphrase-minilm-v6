@@ -1,0 +1,404 @@
+# ==========================================================
+# 📘 PowerPoint Text Extraction Comparison - Detailed Version
+# ==========================================================
+# Author: Shubham Chaudhuri (Customized by ChatGPT GPT-5)
+# Purpose: Compare PPTX text extraction libraries in terms of
+# accuracy, time, reading order, and table handling.
+# ==========================================================
+
+import os
+import time
+import traceback
+import pandas as pd
+import numpy as np
+from pptx import Presentation
+
+# Optional imports handled safely
+try:
+    import textract
+except ImportError:
+    textract = None
+
+try:
+    import pptx2txt
+except ImportError:
+    pptx2txt = None
+
+try:
+    import aspose.slides as slides
+except ImportError:
+    slides = None
+
+
+# ==========================================================
+# CONFIGURATION
+# ==========================================================
+input_folder = "./pptx_folder"  # Folder containing your .pptx files
+output_excel = "pptx_extraction_comparison.xlsx"
+
+os.makedirs(input_folder, exist_ok=True)
+
+# ==========================================================
+# HELPER FUNCTIONS FOR EXTRACTION
+# ==========================================================
+
+def extract_python_pptx(path):
+    """
+    Extracts text and tables using python-pptx.
+    """
+    prs = Presentation(path)
+    text = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text:
+                text.append(shape.text)
+            elif hasattr(shape, "has_table") and shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        text.append(cell.text)
+    return "\n".join(text)
+
+
+def extract_textract(path):
+    """
+    Uses textract library (works on multiple file types).
+    """
+    if textract is None:
+        raise ImportError("textract not installed")
+    return textract.process(path).decode("utf-8", errors="ignore")
+
+
+def extract_pptx2txt(path):
+    """
+    Uses pptx2txt library for text extraction.
+    """
+    if pptx2txt is None:
+        raise ImportError("pptx2txt not installed")
+    return pptx2txt.process(path)
+
+
+def extract_aspose(path):
+    """
+    Uses aspose.slides (requires license or free trial).
+    """
+    if slides is None:
+        raise ImportError("aspose.slides not installed")
+    text = []
+    with slides.Presentation(path) as pres:
+        for slide in pres.slides:
+            for shape in slide.shapes:
+                if shape.text_frame is not None:
+                    text.append(shape.text_frame.text)
+                elif shape.table is not None:
+                    for row in shape.table.rows:
+                        for cell in row:
+                            text.append(cell.text)
+    return "\n".join(text)
+
+
+# ==========================================================
+# READING ORDER CHECK
+# ==========================================================
+
+def check_reading_order(extracted_text):
+    """
+    Heuristic check to determine text order (line, column, random).
+    """
+    lines = [l.strip() for l in extracted_text.splitlines() if l.strip()]
+    if len(lines) < 3:
+        return "Insufficient Data"
+
+    # Calculate continuity score based on punctuation and sequential structure
+    continuity_score = sum(1 for l in lines if l.endswith(('.', '!', '?', ':', ';'))) / len(lines)
+
+    # Check if many short segments (disorderly extraction)
+    short_segments = sum(1 for l in lines if len(l.split()) < 3) / len(lines)
+
+    if continuity_score > 0.75 and short_segments < 0.3:
+        return "Line-wise (Natural)"
+    elif 0.4 < continuity_score <= 0.75:
+        return "Column-wise / Mixed"
+    else:
+        return "Random / Disordered"
+
+
+# ==========================================================
+# METRICS COMPUTATION
+# ==========================================================
+
+def compute_metrics(package_name, pptx_path, extract_func):
+    """
+    Runs extraction and computes time, reading order, etc.
+    """
+    start_time = time.time()
+    result = {"Package": package_name, "File": os.path.basename(pptx_path)}
+
+    try:
+        text = extract_func(pptx_path)
+        end_time = time.time()
+        duration = round(end_time - start_time, 2)
+
+        result["Time Taken (s)"] = duration
+        result["Text Length"] = len(text)
+        result["Reading Order"] = check_reading_order(text)
+        result["Has Tables"] = bool("\t" in text or " | " in text)
+        result["Error"] = None
+
+        return result, text
+
+    except Exception as e:
+        result["Time Taken (s)"] = None
+        result["Text Length"] = 0
+        result["Reading Order"] = "Failed"
+        result["Has Tables"] = False
+        result["Error"] = str(e)
+        return result, ""
+
+
+# ==========================================================
+# MAIN EXTRACTION PIPELINE
+# ==========================================================
+
+extractors = {
+    "python-pptx": extract_python_pptx,
+    "textract": extract_textract,
+    "pptx2txt": extract_pptx2txt,
+    "aspose": extract_aspose,
+}
+
+all_results = []
+all_texts = {pkg: [] for pkg in extractors.keys()}
+errors = []
+
+pptx_files = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.lower().endswith(".pptx")]
+
+if not pptx_files:
+    print("⚠️ No PPTX files found in folder:", input_folder)
+
+for pkg, func in extractors.items():
+    print(f"\n🔹 Processing with {pkg} ...")
+    for pptx_path in pptx_files:
+        res, text = compute_metrics(pkg, pptx_path, func)
+        all_results.append(res)
+        if res["Error"]:
+            errors.append(res)
+        all_texts[pkg].append({
+            "File": os.path.basename(pptx_path),
+            "Extracted_Text": text
+        })
+
+# ==========================================================
+# CREATE SUMMARY MATRICES
+# ==========================================================
+
+df_results = pd.DataFrame(all_results)
+df_time = df_results.pivot(index="File", columns="Package", values="Time Taken (s)")
+df_errors = pd.DataFrame(errors)
+
+# Combined accuracy + reading order sheet
+df_accuracy = df_results[["Package", "File", "Text Length", "Reading Order", "Has Tables", "Time Taken (s)", "Error"]]
+
+# Final summary
+summary = (
+    df_results.groupby("Package")
+    .agg({
+        "Time Taken (s)": "mean",
+        "Text Length": "mean",
+    })
+    .reset_index()
+)
+summary["Avg Time Rank"] = summary["Time Taken (s)"].rank()
+summary["Avg Length Rank"] = summary["Text Length"].rank(ascending=False)
+summary["Overall Rank"] = (summary["Avg Time Rank"] + summary["Avg Length Rank"]) / 2
+
+# ==========================================================
+# COMBINED MATRIX (PER FILE COMPARISON)
+# ==========================================================
+
+combined_matrix = df_results.pivot_table(
+    index="File",
+    columns="Package",
+    values=["Text Length", "Time Taken (s)", "Reading Order"],
+    aggfunc="first"
+)
+
+# ==========================================================
+# SAVE TO EXCEL
+# ==========================================================
+
+with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+    # 1. Each package text
+    for pkg, data in all_texts.items():
+        pd.DataFrame(data).to_excel(writer, sheet_name=pkg[:31], index=False)
+
+    # 2. Time matrix
+    df_time.to_excel(writer, sheet_name="time_taken")
+
+    # 3. Errors
+    df_errors.to_excel(writer, sheet_name="errors", index=False)
+
+    # 4. Accuracy + Reading Order
+    df_accuracy.to_excel(writer, sheet_name="accuracy_readingorder", index=False)
+
+    # 5. Combined comparison
+    combined_matrix.to_excel(writer, sheet_name="combined_matrix")
+
+    # 6. Final summary
+    summary.to_excel(writer, sheet_name="summary", index=False)
+
+print("\n✅ Extraction Comparison Complete!")
+print(f"📁 Excel report saved as: {output_excel}")
+
+
+......dmajajhaja......
+
+
+
+import os
+import time
+import pandas as pd
+import numpy as np
+from pptx import Presentation
+import textract
+import traceback
+
+# Optional imports (safe)
+try:
+    import pptx2txt
+except:
+    pptx2txt = None
+
+try:
+    import aspose.slides as slides
+except:
+    slides = None
+
+
+# --- CONFIG ---
+input_folder = "./pptx_folder"
+output_excel = "pptx_extraction_comparison.xlsx"
+
+os.makedirs(input_folder, exist_ok=True)
+
+# --- Helper Functions ---
+
+def extract_python_pptx(path):
+    text = []
+    prs = Presentation(path)
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text.append(shape.text)
+            elif shape.has_table:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        text.append(cell.text)
+    return "\n".join(text)
+
+def extract_textract(path):
+    return textract.process(path).decode("utf-8")
+
+def extract_pptx2txt(path):
+    if pptx2txt is None:
+        raise ImportError("pptx2txt not available")
+    return pptx2txt.process(path)
+
+def extract_aspose(path):
+    if slides is None:
+        raise ImportError("aspose not available")
+    with slides.Presentation(path) as pres:
+        text = []
+        for slide in pres.slides:
+            for shape in slide.shapes:
+                if shape.text_frame is not None:
+                    text.append(shape.text_frame.text)
+                elif shape.table is not None:
+                    for row in shape.table.rows:
+                        for cell in row:
+                            text.append(cell.text)
+        return "\n".join(text)
+
+
+# --- Evaluator Functions ---
+
+def check_reading_order(extracted_text):
+    """Heuristic: checks if text follows natural reading order."""
+    lines = extracted_text.strip().splitlines()
+    avg_len = np.mean([len(l) for l in lines if l.strip()])
+    continuity_score = sum(1 for l in lines if l.endswith(('.', ':', ';'))) / (len(lines) + 1)
+    
+    if continuity_score > 0.8:
+        return "Best"
+    elif continuity_score > 0.4:
+        return "Good"
+    else:
+        return "Bad"
+
+def compute_metrics(package_name, pptx_path, extract_func):
+    start = time.time()
+    result = {"Package": package_name, "File": os.path.basename(pptx_path)}
+    try:
+        text = extract_func(pptx_path)
+        end = time.time()
+        result["Time Taken (s)"] = round(end - start, 2)
+        result["Text Length"] = len(text)
+        result["Reading Order"] = check_reading_order(text)
+        result["Has Tables"] = "Table" in text or "\t" in text
+        result["Has Notes"] = "Notes" in text
+        result["Error"] = None
+        return result, text
+    except Exception as e:
+        result["Error"] = str(e)
+        result["Time Taken (s)"] = None
+        return result, ""
+
+# --- MAIN LOOP ---
+
+extractors = {
+    "python-pptx": extract_python_pptx,
+    "textract": extract_textract,
+    "pptx2txt": extract_pptx2txt,
+    "aspose": extract_aspose,
+}
+
+all_results = []
+all_texts = {pkg: [] for pkg in extractors.keys()}
+errors = []
+
+pptx_files = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(".pptx")]
+
+for pkg, func in extractors.items():
+    print(f"Processing with {pkg} ...")
+    for ppt in pptx_files:
+        res, text = compute_metrics(pkg, ppt, func)
+        all_results.append(res)
+        if res["Error"]:
+            errors.append(res)
+        all_texts[pkg].append({
+            "File": os.path.basename(ppt),
+            "Extracted_Text": text
+        })
+
+# --- CREATE DATAFRAMES ---
+df_results = pd.DataFrame(all_results)
+df_time = df_results.pivot(index="File", columns="Package", values="Time Taken (s)")
+df_errors = pd.DataFrame(errors)
+df_summary = df_results.groupby("Package").agg({
+    "Time Taken (s)": "mean",
+    "Text Length": "mean"
+}).reset_index()
+
+# Add ranking logic
+df_summary["Speed Rank"] = df_summary["Time Taken (s)"].rank()
+df_summary["Length Rank"] = df_summary["Text Length"].rank(ascending=False)
+
+# --- WRITE TO EXCEL ---
+with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+    for pkg, data in all_texts.items():
+        pd.DataFrame(data).to_excel(writer, sheet_name=pkg[:31], index=False)
+    df_time.to_excel(writer, sheet_name="time_taken")
+    df_errors.to_excel(writer, sheet_name="errors", index=False)
+    df_results.to_excel(writer, sheet_name="accuracy_readingorder", index=False)
+    df_summary.to_excel(writer, sheet_name="summary", index=False)
+
+print(f"\n✅ Completed. Detailed Excel saved as: {output_excel}")
