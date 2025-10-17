@@ -402,3 +402,60 @@ with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
     df_summary.to_excel(writer, sheet_name="summary", index=False)
 
 print(f"\n✅ Completed. Detailed Excel saved as: {output_excel}")
+
+____&&&&____&&&&____&&&____&&&&____
+
+import aspose.slides as slides
+import os
+import pandas as pd
+import time
+import traceback
+
+input_folder = "pptx_files"
+output_excel = "aspose_results.xlsx"
+
+def extract_aspose(file_path):
+    with slides.Presentation(file_path) as pres:
+        text_items = []
+        for slide in pres.slides:
+            for shape in slide.shapes:
+                if shape.text_frame is not None:
+                    text_items.append(shape.text_frame.text)
+                if shape.table is not None:
+                    for r in range(shape.table.rows_count):
+                        text_items.append(" | ".join([
+                            shape.table.get_Cell(r, c).text_frame.text
+                            for c in range(shape.table.columns_count)
+                        ]))
+        return "\n".join([x.strip() for x in text_items if x.strip()])
+
+records = []
+errors = []
+
+for file in os.listdir(input_folder):
+    if not file.endswith(".pptx"):
+        continue
+    path = os.path.join(input_folder, file)
+    try:
+        start = time.time()
+        text = extract_aspose(path)
+        end = time.time()
+        records.append({
+            "File": file,
+            "Library": "aspose.slides",
+            "TimeTaken": round(end - start, 3),
+            "ExtractedText": text
+        })
+    except Exception as e:
+        errors.append({
+            "File": file,
+            "Error": str(e),
+            "Traceback": traceback.format_exc()
+        })
+
+with pd.ExcelWriter(output_excel) as writer:
+    pd.DataFrame(records).to_excel(writer, sheet_name="Results", index=False)
+    if errors:
+        pd.DataFrame(errors).to_excel(writer, sheet_name="Errors", index=False)
+
+print(f"✅ Aspose extraction completed. Results saved to {output_excel}")
