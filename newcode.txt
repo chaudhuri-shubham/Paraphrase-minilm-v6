@@ -459,3 +459,232 @@ with pd.ExcelWriter(output_excel) as writer:
         pd.DataFrame(errors).to_excel(writer, sheet_name="Errors", index=False)
 
 print(f"✅ Aspose extraction completed. Results saved to {output_excel}")
+
+####.ekdjx.d........................
+
+# ==============================================
+# 📊 PPTX Text Extraction Benchmark Framework
+# ==============================================
+
+import os
+import time
+import pandas as pd
+import numpy as np
+from pptx import Presentation
+import pptx2txt2
+import textract
+import traceback
+from difflib import SequenceMatcher
+from collections import Counter
+from openpyxl import Workbook
+
+# -------- CONFIG -------- #
+input_folder = "pptx_files"       # Folder containing your PPTX files
+output_excel = "pptx_extraction_analysis.xlsx"
+
+# -------- HELPER FUNCTIONS -------- #
+
+def read_pptx_python_pptx(file_path):
+    """Extract text + tables using python-pptx."""
+    prs = Presentation(file_path)
+    extracted = []
+    total_textboxes, extracted_textboxes = 0, 0
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                total_textboxes += 1
+                text = shape.text.strip()
+                if text:
+                    extracted_textboxes += 1
+                    extracted.append(text)
+            if shape.shape_type == 19:  # Table
+                for row in shape.table.rows:
+                    extracted_textboxes += 1
+                    total_textboxes += 1
+                    extracted.append(" | ".join([cell.text.strip() for cell in row.cells if cell.text.strip()]))
+    text_combined = "\n".join(extracted)
+    return text_combined, total_textboxes, extracted_textboxes
+
+
+def read_pptx_pptx2txt2(file_path):
+    """Extract text using pptx2txt2."""
+    text = pptx2txt2.process(file_path)
+    return text.strip() if text else ""
+
+
+def read_pptx_textract(file_path):
+    """Extract text using textract."""
+    text = textract.process(file_path).decode("utf-8", errors="ignore")
+    return text.strip()
+
+
+# -------- QUALITY METRIC FUNCTIONS -------- #
+
+def text_accuracy(ref_text, extracted_text):
+    """String similarity metric."""
+    return round(SequenceMatcher(None, ref_text, extracted_text).ratio(), 3)
+
+
+def check_reading_order(text):
+    """Detect reading order pattern (row/column/random)."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if len(lines) < 3:
+        return "Insufficient data"
+
+    line_lengths = [len(l) for l in lines]
+    jumps = sum(1 for i in range(1, len(lines)) if abs(line_lengths[i] - line_lengths[i-1]) > 40)
+    std_dev = np.std(line_lengths)
+
+    if jumps <= len(lines)*0.1 and std_dev < 50:
+        return "Best"
+    elif jumps <= len(lines)*0.3:
+        return "Good"
+    else:
+        return "Bad"
+
+
+def structure_type(text):
+    """Detect structural format type."""
+    bullets = sum(text.count(x) for x in ["•", "-", "*"])
+    table_lines = sum(1 for l in text.split("\n") if "|" in l)
+    if bullets > 3 and table_lines > 3:
+        return "Mixed"
+    elif table_lines > 3:
+        return "Tabular"
+    elif bullets > 3:
+        return "Bulleted"
+    else:
+        return "Plain"
+
+
+def completeness_score(total, extracted):
+    """Ratio of extracted vs total shapes."""
+    if total == 0:
+        return 1.0
+    return round(extracted / total, 3)
+
+
+def noise_ratio(text):
+    """Detect unreadable/garbage character ratio."""
+    total_chars = len(text)
+    if total_chars == 0:
+        return 0
+    weird_chars = sum(1 for c in text if ord(c) < 32 or ord(c) > 126)
+    return round(weird_chars / total_chars, 3)
+
+
+def duplication_rate(text):
+    """Check if text lines are repeated."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if not lines:
+        return 0
+    unique_count = len(set(lines))
+    return round(1 - unique_count / len(lines), 3)
+
+
+def multilingual_support(text):
+    """Check if text includes non-English alphabets."""
+    for c in text:
+        if "\u0900" <= c <= "\u097F" or "\u0980" <= c <= "\u09FF":
+            return "Yes"
+    return "No"
+
+
+# -------- LIBRARY SETUP -------- #
+
+extractors = {
+    "python-pptx": read_pptx_python_pptx,
+    "pptx2txt2": read_pptx_pptx2txt2,
+    "textract": read_pptx_textract
+}
+
+# -------- MAIN PROCESS -------- #
+
+results = []
+errors = []
+
+for file in os.listdir(input_folder):
+    if not file.endswith(".pptx"):
+        continue
+    file_path = os.path.join(input_folder, file)
+    print(f"\nProcessing: {file}")
+
+    try:
+        ref_text, total_boxes, extracted_boxes = read_pptx_python_pptx(file_path)
+    except Exception as e:
+        errors.append({"File": file, "Library": "python-pptx (baseline)", "Error": str(e)})
+        continue
+
+    for lib_name, extractor in extractors.items():
+        print(f"   -> Using {lib_name}...")
+        start = time.time()
+        try:
+            if lib_name == "python-pptx":
+                text, total, extracted = read_pptx_python_pptx(file_path)
+            else:
+                text = extractor(file_path)
+                total, extracted = total_boxes, extracted_boxes
+            end = time.time()
+
+            acc = text_accuracy(ref_text, text)
+            order = check_reading_order(text)
+            struct = structure_type(text)
+            complete = completeness_score(total, extracted)
+            noise = noise_ratio(text)
+            dup = duplication_rate(text)
+            multi = multilingual_support(text)
+
+            # Weighted quality score
+            quality = round((acc * 0.4) + (complete * 0.2) +
+                            ((1 - noise) * 0.1) + ((1 - dup) * 0.1) +
+                            (0.2 if order == "Best" else 0.1 if order == "Good" else 0.05), 3)
+
+            results.append({
+                "File": file,
+                "Library": lib_name,
+                "Accuracy": acc,
+                "TimeTaken": round(end - start, 3),
+                "ReadingOrder": order,
+                "Structure": struct,
+                "Completeness": complete,
+                "NoiseRatio": noise,
+                "DuplicationRate": dup,
+                "Multilingual": multi,
+                "QualityScore": quality
+            })
+        except Exception as e:
+            end = time.time()
+            errors.append({
+                "File": file,
+                "Library": lib_name,
+                "Error": str(e),
+                "Traceback": traceback.format_exc()
+            })
+
+# -------- EXCEL OUTPUT -------- #
+
+df = pd.DataFrame(results)
+df_err = pd.DataFrame(errors)
+
+with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+    # Per-library sheets
+    for lib in df["Library"].unique():
+        lib_df = df[df["Library"] == lib]
+        lib_df.to_excel(writer, sheet_name=lib[:30], index=False)
+
+    # Combined
+    df.to_excel(writer, sheet_name="CombinedMatrix", index=False)
+
+    # Reading order pivot
+    pivot_order = pd.pivot_table(df, index="Library", columns="ReadingOrder", values="File", aggfunc="count", fill_value=0)
+    pivot_order.to_excel(writer, sheet_name="ReadingOrderMatrix")
+
+    # Summary
+    summary = df.groupby("Library")[["Accuracy", "Completeness", "NoiseRatio", "DuplicationRate", "TimeTaken", "QualityScore"]].mean().reset_index()
+    summary.to_excel(writer, sheet_name="Summary", index=False)
+
+    # Errors
+    if not df_err.empty:
+        df_err.to_excel(writer, sheet_name="Errors", index=False)
+
+print(f"\n✅ All processing done. Detailed report saved to: {output_excel}")
