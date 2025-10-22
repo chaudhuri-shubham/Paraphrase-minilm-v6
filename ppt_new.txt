@@ -481,3 +481,17 @@ Tune weights in the Quality Score to your business needs (e.g., legal compliance
 Log extracted text per-file and per-extractor (already in the Excel) — nothing replaces spot-checking raw outputs for edge cases (SmartArt, grouped shapes, OCR text inside images).
 
 Consider a hybrid system: use python-pptx or other structural extractors for tables and shapes, and Tika/textract for fallback and the rest.
+
+
+
+mmmmmmmmmmm
+
+# Read reference text for the same ppt
+with open(f'reference_texts/{ppt_name}.txt', 'r', encoding='utf-8') as f:
+    reference_text = f.read()
+
+# Extract text using library
+extracted_text = extract_with_library(file_path, lib_name)
+
+# Compare extracted_text vs reference_text
+metrics = evaluate_extraction(reference_text, extracted_text)
