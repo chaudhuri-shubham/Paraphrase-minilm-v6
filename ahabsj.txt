@@ -1,0 +1,114 @@
+import pandas as pd
+import time
+import os
+from pptx import Presentation
+import textract
+from pptx2txt2 import pptx2txt
+from fuzzywuzzy import fuzz
+from collections import Counter
+
+# ===============  CONFIG  ===============
+REFERENCE_FILE = "reference_texts.xlsx"   # your manually created excel
+PPT_FOLDER = "ppt_files/"                 # folder containing pptx
+OUTPUT_FILE = "ppt_extraction_comparison.xlsx"
+
+# ===============  LOAD REFERENCE  ===============
+reference_df = pd.read_excel(REFERENCE_FILE)
+reference_dict = dict(zip(reference_df['ppt_name'], reference_df['reference_text']))
+
+# ===============  TEXT EXTRACTION FUNCTIONS  ===============
+def extract_pptx_pythonpptx(path):
+    prs = Presentation(path)
+    text = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text.append(shape.text)
+    return "\n".join(text)
+
+def extract_textract(path):
+    try:
+        text = textract.process(path).decode("utf-8", errors="ignore")
+        return text
+    except Exception:
+        return ""
+
+def extract_pptx2txt2(path):
+    try:
+        return pptx2txt(path)
+    except Exception:
+        return ""
+
+# ===============  METRIC FUNCTIONS  ===============
+def get_common_words(ref, ext):
+    ref_words = ref.split()
+    ext_words = ext.split()
+    common = set(ref_words).intersection(set(ext_words))
+    return len(common), ref_words, ext_words
+
+def calculate_metrics(reference, extracted):
+    if not reference or not extracted:
+        return {m: 0 for m in ["Accuracy","Completeness","NoiseRatio","DuplicateRate","TextLenDiff","WordCountDiff","QualityScore"]}
+    
+    accuracy = fuzz.ratio(reference, extracted) / 100
+
+    common_len, ref_words, ext_words = get_common_words(reference, extracted)
+    completeness = common_len / len(ref_words) if len(ref_words)>0 else 0
+    noise = max((len(ext_words) - common_len) / len(ext_words), 0) if len(ext_words)>0 else 0
+    duplicate_rate = 1 - len(set(ext_words))/len(ext_words) if len(ext_words)>0 else 0
+    textlen_diff = abs(len(reference) - len(extracted)) / len(reference) if len(reference)>0 else 0
+    wordcount_diff = abs(len(ref_words) - len(ext_words)) / len(ref_words) if len(ref_words)>0 else 0
+
+    # Weighted composite score (customizable)
+    quality = (0.4*accuracy + 0.3*completeness - 0.2*noise - 0.1*duplicate_rate)
+
+    return {
+        "Accuracy": accuracy,
+        "Completeness": completeness,
+        "NoiseRatio": noise,
+        "DuplicateRate": duplicate_rate,
+        "TextLenDiff": textlen_diff,
+        "WordCountDiff": wordcount_diff,
+        "QualityScore": quality
+    }
+
+# ===============  MAIN LOOP  ===============
+packages = {
+    "python-pptx": extract_pptx_pythonpptx,
+    "pptx2txt2": extract_pptx2txt2,
+    "textract": extract_textract
+}
+
+results_combined = []
+package_dfs = {}
+
+for pkg_name, extractor in packages.items():
+    pkg_results = []
+    for ppt_name, ref_text in reference_dict.items():
+        ppt_path = os.path.join(PPT_FOLDER, ppt_name)
+        if not os.path.exists(ppt_path):
+            continue
+        
+        start = time.time()
+        extracted_text = extractor(ppt_path)
+        end = time.time()
+
+        metrics = calculate_metrics(ref_text, extracted_text)
+        metrics["ExtractionTime"] = end - start
+        metrics["ppt_name"] = ppt_name
+        metrics["ExtractedText"] = extracted_text
+        pkg_results.append(metrics)
+        results_combined.append({
+            "ppt_name": ppt_name, "Package": pkg_name, **metrics
+        })
+
+    pkg_df = pd.DataFrame(pkg_results)
+    package_dfs[pkg_name] = pkg_df
+
+# ===============  SAVE OUTPUT  ===============
+with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
+    for pkg, df_pkg in package_dfs.items():
+        df_pkg.to_excel(writer, sheet_name=pkg, index=False)
+    pd.DataFrame(results_combined).to_excel(writer, sheet_name="Combined_Matrix", index=False)
+
+print(f"✅ All results saved to {OUTPUT_FILE}")
