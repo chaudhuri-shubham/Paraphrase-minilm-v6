@@ -216,3 +216,268 @@ with pd.ExcelWriter(OUTPUT_EXCEL, engine="openpyxl") as writer:
     pd.DataFrame(errors).to_excel(writer, sheet_name="Errors", index=False)
 
 print(f"\n✅ Extraction completed successfully.\nResults saved to {OUTPUT_EXCEL}")
+
+------------------------------
+
+Great — below is a clear, thorough justification and description for every metric and piece of logic in your PPTX extraction benchmark. I explain why each metric matters, how it’s computed in the code, what its values mean, important caveats, and recommended actions when a metric is bad. Use this as a reference to interpret the Excel report or to tweak weights/thresholds.
+
+
+---
+
+Overall design principle (short)
+
+We compare extractors not just by “how much text they return” but by usefulness of that text for downstream tasks (search/indexing, NLP, human reading). That requires measuring multiple orthogonal properties: correctness (accuracy), completeness, cleanliness (noise/duplicates), layout fidelity (reading order), speed, and robustness (errors). Combining them yields a single Quality Score while preserving the individual metrics for diagnosis.
+
+
+---
+
+Metric-by-metric: definition, rationale, formula, caveats, thresholds & actions
+
+1) Time (s)
+
+What: Time (in seconds) taken by the extractor to process one PPT file.
+Why: Efficiency matters for production — throughput and cost. A slightly slower extractor may be acceptable if quality is much better, but not vice-versa.
+How computed: end_time - start_time measured around the extraction call.
+Caveats: Includes library startup overhead (Tika/LibreOffice may incur JVM / process startup cost). For fair comparisons, run repeated trials or keep long-running server versions.
+Interpretation (example thresholds):
+
+Very Fast: < 0.5s (small slides)
+
+Acceptable: 0.5–2s
+
+Slow: > 2s (investigate) Action if bad: Consider batching, running server-mode (Tika), or using a faster library for indexing while using the accurate one for critical tasks.
+
+
+
+---
+
+2) Text Length (characters)
+
+What: Total number of characters in the extracted text.
+Why: Quick signal of volume — very short outputs often indicate missed text, truncated files, or failed extraction.
+How computed: len(extracted_text) in code.
+Caveats: More characters is not always better (may include junk or repeated content). Use together with Noise Ratio and Duplicate Rate.
+Interpretation:
+
+If length ≈ baseline → likely good.
+
+If much less → missing content.
+
+If much more → possible duplication or garbage.
+Action if bad: Inspect sample extracted text; check for repeated blocks or binary artifacts.
+
+
+
+---
+
+3) Word Count
+
+What: Number of words in extracted text.
+Why: Less sensitive to punctuation noise than character length; aligns better with semantic content.
+How computed: len(text.split()).
+Caveats: Splitting logic is naive (might break on punctuation). Prefer word counts for coarse completeness checks.
+Action if mismatch with baseline: check where words are missing — headers, footers, notes, table cells.
+
+
+---
+
+4) Accuracy Score (Overlap with baseline)
+
+What: Proportion of baseline words found in the extractor’s output. Formula used in code:
+Accuracy = |A ∩ B| / |A| where A = set(words from baseline extractor, e.g., python-pptx), B = set(words from tested extractor.
+Why: Measures how much of the authoritative extraction is preserved; baseline should be a fairly reliable extractor (we used python-pptx as baseline because it reads native PPTX structure).
+How computed: Convert both texts to token sets, compute intersection size / baseline size. (In code we use simple whitespace tokenization.)
+Caveats:
+
+Set-based comparison ignores duplicates and ordering.
+
+Word-tokenization differences (case, punctuation) affect result — normalization (lowercasing, punctuation removal) helps.
+
+Baseline choice matters — if baseline misses something, accuracy is measured relative to that baseline. Consider an ensemble baseline (merge outputs) for higher confidence. Interpretation:
+
+1.0 (100%): Extractor contains all baseline words (good).
+
+< 0.8: significant differences — investigate missing content.
+Action if low: Inspect which slide elements are not captured (tables, notes, grouped shapes), then pick extractor that preserves those elements.
+
+
+
+---
+
+5) Completeness Score
+
+What: Ratio of extracted word count to baseline word count, capped at 1.0.
+Why: Measures quantity coverage relative to baseline (are we extracting all blocks?).
+How computed: min(len(B)/len(A), 1) where A = baseline word count, B = tested extractor.
+Caveats: If baseline contains duplicates or noise, completeness may be misleading. Use with Accuracy.
+Interpretation:
+
+1.0 → equal or more words than baseline (may indicate duplication)
+
+<1.0 → missing content
+Action if low: check which elements are skipped (hidden shapes, notes) and whether that matters for your use-case.
+
+
+
+---
+
+6) Reading Order
+
+What: A categorical label indicating how natural the reading sequence is in the extracted text: e.g. Best / Good / Bad (or Line-wise / Paragraph-wise / Random) depending on the heuristic.
+Why: For document search and human-readable output, preserving visual reading order matters. If text flows logically, contextual extraction (QA, summarization) will work better.
+How computed: Two strategies in the code:
+
+If coordinates are available (Python-pptx shapes or PyMuPDF blocks), compare the order returned by the extractor to the natural top→left order (Spearman correlation / LCS).
+
+If coordinates are not available, use heuristics on line lengths, punctuation continuity, or changes between consecutive lines (jumps) to infer disorder.
+Caveats:
+
+Heuristics are fallible. Two-column layouts may appear “mixed” even if output is semantically fine.
+
+Some downstream models (bag-of-words, embeddings) are order-insensitive, so reading order may be lower priority.
+Interpretation & Actions:
+
+Best/Line-wise → no action.
+
+Good → acceptable for search, but check multi-column slides.
+
+Bad/Random → consider alternate extractor or postprocessing (re-order by y,x if coordinates available).
+
+
+
+---
+
+7) Structure Type
+
+What: A high-level label that describes the structural nature of the slide text: Plain, Bulleted, Tabular, Mixed.
+Why: Different extractors excel at different structures (e.g., tables vs bullet lists). Knowing slide structure helps interpret other metrics and decide extractor trade-offs.
+How computed: Heuristic detection — count bullet symbols, count lines containing | (or tab separators) and decide.
+Caveats: Heuristics miss fancy table formatting or SmartArt; detecting SmartArt requires deeper shape parsing.
+Action if mismatch: If many slides are Tabular but extractor handles tables poorly, prefer Python-pptx or a table-aware extractor.
+
+
+---
+
+8) Noise Ratio
+
+What: Fraction of characters that look like noise / non-alphanumeric / non-whitespace.
+Why: High noise indicates encoding issues, OCR garbage, or HTML/markup leakage. Clean text is essential for downstream NLP.
+How computed: weird_chars / total_chars where weird_chars = count of chars with ord outside typical printable ASCII range (or other heuristics).
+Caveats: Non-Latin scripts increase this measure if you only expect ASCII. For multilingual documents, refine “weird” detection to allowed Unicode ranges.
+Interpretation:
+
+~0 → clean text
+
+>0.05 → suspicious — inspect samples
+Action if high: check for encoding problems, use appropriate decoding, or try a different extractor (Tika/OCR fallback).
+
+
+
+---
+
+9) Duplicate Rate
+
+What: Proportion of duplicate lines among all non-empty lines: 1 - unique_lines / total_lines.
+Why: Repetition may indicate that an extractor redundantly reads the same shape multiple times (common with flattened XML or layout confusion). Duplicates inflate length and mislead indexing.
+How computed: Build a set of distinct lines and compare to total.
+Caveats: Some legitimate slides may repeat labels (e.g., footer on every slide) — consider deduplicating footer lines before final scoring.
+Interpretation:
+
+0 → no duplication
+
+>0.1 → moderate duplication
+
+>0.3 → severe duplication
+Action if high: add deduplication step or fix extractor settings.
+
+
+
+---
+
+10) Multilingual Support
+
+What: Detects presence of non-English scripts (simple heuristic for Indic ranges in code).
+Why: Many extractors fail on non-Latin characters; verifying multilingual text is crucial for correct indexing.
+How computed: Check for characters in target Unicode ranges (e.g., Bengali, Devanagari).
+Caveats: This is a binary / heuristic check; extend to detect specific languages with language detection libraries if needed.
+Action if unsupported: choose extractors with robust Unicode handling or add language-aware postprocessing.
+
+
+---
+
+11) Quality Score (composite)
+
+What: Weighted composite that summarizes overall extraction quality into one score for easier ranking. Example weights used in the code:
+Quality = 0.4*Accuracy + 0.3*Completeness + 0.2*(1 - Noise) + 0.1*(1 - Duplication)
+Why: Single-number ranking is convenient for initial selection, but you must look at individual metrics before making a final decision.
+How computed: Weighted linear combination of normalized metrics (all between 0 and 1).
+Caveats: Weights are subjective — adjust to reflect your priorities (e.g., for table-heavy slides increase completeness/table weight).
+Interpretation: Higher is better (max 1.0). Use it for quick ranking but inspect all component metrics for the top pick.
+
+
+---
+
+12) Errors (Robustness)
+
+What: Count and detail of failures when running extraction (exceptions, crashes).
+Why: A library that gives perfect text but crashes frequently is useless in production.
+How computed: Log exception messages, stack traces, and whether extraction returned empty or partially processed results.
+Action: Prefer stable extractors with low error rates. For occasional failing files, consider fallbacks (e.g., if python-pptx fails, use pdf conversion + PyMuPDF).
+
+
+---
+
+Practical interpretation guidance (how to compare libraries)
+
+1. Start with Quality Score to rank candidates. Then inspect top 2–3 libraries in detail.
+
+
+2. Look at Completeness vs Accuracy:
+
+High completeness + low accuracy → many extra words that aren't in baseline (maybe noise/duplication).
+
+Low completeness + high accuracy → crisp but partial extraction (misses text blocks).
+
+
+
+3. If tables matter: prefer extractors that show low Noise, high Accuracy on table lines, and evidence of table extraction (serialized table cells).
+
+
+4. If layout matters (two-column slides, labels): reading order and block-coordinates matter — prefer extractors exposing coordinates (python-pptx, PyMuPDF).
+
+
+5. If multilingual: check multilingual support and low noise for those scripts.
+
+
+6. If at scale: balance Time with Quality Score. Consider server-mode or hybrid approach (fast extractor for search, slower accurate extractor for detailed views).
+
+
+
+
+---
+
+Example decision rules (recommendations)
+
+If Quality Score >= 0.9 and Time < 1s → default pick for production.
+
+If Quality Score >= 0.95 but Time > 2s → use as authoritative extractor for indexing periodically, but use a faster library for near-real-time ingest.
+
+If Completeness < 0.8 → reject for datasets where missing content is critical.
+
+If Noise Ratio > 0.05 or Duplication Rate > 0.2 → avoid unless you implement aggressive cleaning.
+
+
+
+---
+
+Final notes & best practices
+
+Normalize tokens before similarity checks (lowercase, remove punctuation) if you want more robust Accuracy.
+
+Use a small human-reviewed ground-truth set (10–50 typical PPTs) for final evaluation rather than relying solely on a single baseline.
+
+Tune weights in the Quality Score to your business needs (e.g., legal compliance may prioritize completeness).
+
+Log extracted text per-file and per-extractor (already in the Excel) — nothing replaces spot-checking raw outputs for edge cases (SmartArt, grouped shapes, OCR text inside images).
+
+Consider a hybrid system: use python-pptx or other structural extractors for tables and shapes, and Tika/textract for fallback and the rest.
