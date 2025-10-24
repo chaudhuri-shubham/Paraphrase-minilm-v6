@@ -54,3 +54,26 @@ try:
     text = raw.decode("shift_jis")  # this line forces the same error
 except UnicodeDecodeError as e:
     print("💥 Got expected error:", e)
+
+....................
+
+import extract_msg
+
+msg = extract_msg.Message("accent_test.msg")
+
+raw = msg._getStringStream("__substg1.0_1000")  # raw message body bytes
+print("Raw bytes sample:", raw[:40])
+
+# Force Shift_JIS decode on bytes that aren't Shift_JIS
+raw.decode("shift_jis")  # 💥 should trigger UnicodeDecodeError
+
+.....................
+
+import extract_msg
+
+msg = extract_msg.Message("accent_test.msg")
+raw = msg._getStringStream("__substg1.0_1000")
+
+# Check for problematic Latin-1 bytes
+illegal_bytes = [b for b in raw if b in (0xF1, 0xF3, 0xE9, 0xFA)]
+print("Problem bytes found:", [hex(b) for b in illegal_bytes])
