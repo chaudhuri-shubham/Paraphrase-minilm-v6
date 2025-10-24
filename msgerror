@@ -95,3 +95,45 @@ try:
 except UnicodeDecodeError as e:
     print("💥 Got the error!")
     print(e)
+
+_____________________
+
+# invalid shift_jis bytes
+invalid_bytes = b'\x82\xa0\x82\xa2\x82\xa4\xf3\xf0\x9f\x92\xa5'  
+# first few bytes (0x82a0 etc.) are valid Japanese in Shift_JIS
+# last few (0xf3, 0xf0, 0x9f, 0x92, 0xa5) simulate emoji UTF-8 data
+
+from olefile import OleFileIO, isOleFile
+import struct
+
+# Create a blank OLE2 file
+with open("broken_shiftjis.msg", "wb") as f:
+    # Minimal header for OLE structured file (we’ll fake most of it)
+    f.write(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")  # magic bytes for OLE2
+    f.write(b"\x00" * 512)  # pad rest of header (we’re not building a valid FAT)
+
+import olefile
+
+# Open existing .msg
+src = "template.msg"
+dst = "broken_shiftjis.msg"
+
+# Open OLE file
+ole = olefile.OleFileIO(src)
+
+# Copy to new file
+import shutil
+shutil.copy(src, dst)
+
+# Reopen for modification (we’ll hex-edit the stream)
+with open(dst, "r+b") as f:
+    data = f.read()
+    # Find the 'Hello' bytes or any body-like string and replace
+    new_data = data.replace(b"Hello", invalid_bytes)
+    f.seek(0)
+    f.write(new_data)
+
+import extract_msg
+
+msg = extract_msg.Message("broken_shiftjis.msg")
+print(msg.body)
