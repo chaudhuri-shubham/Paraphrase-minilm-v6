@@ -8,3 +8,16 @@ Let's meet at the café near the station tomorrow.
 Also, confirm for Señor García.
 
 Thanks 😊
+
+
+# demo_shiftjis_error.py
+# This reproduces the exact same 'shift_jis' UnicodeDecodeError
+
+# Make text containing accented characters that produce 0xF3 etc. in Latin-1
+latin_text = "Señor López met at the café. Cómo estás?"
+
+# Encode it as Latin-1 bytes (produces 0xF3 for 'ó', 0xF1 for 'ñ')
+latin_bytes = latin_text.encode("latin-1")
+
+# Try decoding those bytes as Shift_JIS (what extract_msg might do incorrectly)
+decoded = latin_bytes.decode("shift_jis")
