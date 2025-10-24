@@ -77,3 +77,7 @@ raw = msg._getStringStream("__substg1.0_1000")
 # Check for problematic Latin-1 bytes
 illegal_bytes = [b for b in raw if b in (0xF1, 0xF3, 0xE9, 0xFA)]
 print("Problem bytes found:", [hex(b) for b in illegal_bytes])
+
+............
+
+This is a test 💥 — contains emoji and non-SJIS characters like ą, ł, ć, 你好
