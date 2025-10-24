@@ -81,3 +81,17 @@ print("Problem bytes found:", [hex(b) for b in illegal_bytes])
 ............
 
 This is a test 💥 — contains emoji and non-SJIS characters like ą, ł, ć, 你好
+
+
+
+..............
+
+# Step 3: Simulate extract_msg’s internal decoding
+bad_bytes = "テスト".encode("shift_jis") + b"\xf0\x9f\x92\xa5"  # invalid emoji bytes
+
+# Try decoding with shift_jis
+try:
+    text = bad_bytes.decode("shift_jis")
+except UnicodeDecodeError as e:
+    print("💥 Got the error!")
+    print(e)
