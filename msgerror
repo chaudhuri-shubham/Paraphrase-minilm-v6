@@ -21,3 +21,36 @@ latin_bytes = latin_text.encode("latin-1")
 
 # Try decoding those bytes as Shift_JIS (what extract_msg might do incorrectly)
 decoded = latin_bytes.decode("shift_jis")
+
+
+# fake_msg_error.py
+
+latin_text = "Hola Señor, cómo estás en el café?"
+data = latin_text.encode("latin-1")  # contains 0xF3
+
+with open("broken.msg", "wb") as f:
+    f.write(data)
+
+
+
+with open("broken.msg", "rb") as f:
+    raw = f.read()
+
+raw.decode("shift_jis")  # ❌ Raises the same UnicodeDecodeError
+
+
+import extract_msg
+
+# Create a dummy .msg file (not a real Outlook one)
+with open("broken.msg", "wb") as f:
+    f.write("Señor López en el café".encode("latin-1"))
+
+# Patch extract_msg to force Shift_JIS decode
+msg = extract_msg.Message("broken.msg")
+
+try:
+    # Emulate what happens when wrong codec is used
+    raw = msg._getStringStream("__substg1.0_1000")
+    text = raw.decode("shift_jis")  # this line forces the same error
+except UnicodeDecodeError as e:
+    print("💥 Got expected error:", e)
