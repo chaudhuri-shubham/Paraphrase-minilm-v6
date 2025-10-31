@@ -137,3 +137,42 @@ import extract_msg
 
 msg = extract_msg.Message("broken_shiftjis.msg")
 print(msg.body)
+
+
+................
+
+
+import boto3
+import pandas as pd
+
+# --- Create the S3 client ---
+s3 = boto3.client(
+    's3',
+    endpoint_url='https://vpce-xxxxxxxxxxxxx.s3.ap-south-1.vpce.amazonaws.com',
+    verify='/path/to/your/cabundle.pem'
+)
+
+bucket_name = 'your-bucket-name'
+
+# --- Initialize pagination ---
+paginator = s3.get_paginator('list_objects_v2')
+page_iterator = paginator.paginate(Bucket=bucket_name)
+
+# --- Collect all objects ---
+all_files = []
+for page in page_iterator:
+    if 'Contents' in page:
+        for obj in page['Contents']:
+            all_files.append({
+                'Key': obj['Key'],
+                'LastModified': obj['LastModified'],
+                'Size (Bytes)': obj['Size'],
+                'StorageClass': obj.get('StorageClass', ''),
+                'ETag': obj.get('ETag', '')
+            })
+
+# --- Create DataFrame ---
+df = pd.DataFrame(all_files)
+
+print(f"Total files fetched: {len(df)}")
+df.head(10)
