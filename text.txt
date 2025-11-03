@@ -1,0 +1,111 @@
+Perfect 👍 — here’s how we’ll redesign Tab 1 (the “Summary of Changes”) as a bullet-point summary, making it more readable and presentation-ready while keeping Tab 2 detailed and structured.
+
+
+---
+
+🧾 Tab 1 — Summary of Changes (Bullet Format)
+
+Title: Change in Error Classification for Data Extraction – Handling of Failed File Issues
+
+
+---
+
+🔹 Background
+
+Earlier, all extraction issues such as unreadable, encrypted, or unsupported files were categorized under “Failed File Issue.”
+
+This made it difficult to distinguish between genuine technical extraction failures and non-actionable cases (like password-protected or out-of-scope files).
+
+
+
+---
+
+🔹 What Has Changed
+
+The logic has been updated to separate true failures from exceptions.
+
+Two new exception categories have been introduced:
+
+Password Protected – files intentionally locked or encrypted.
+
+Out of Scope – files that fall outside the defined extraction scope (e.g., unsupported format, irrelevant type).
+
+
+These exceptions are no longer counted as “Failed File Issues.”
+
+
+
+---
+
+🔹 Why the Change Was Needed
+
+To ensure more accurate failure rate metrics.
+
+To differentiate between system limitations and intentional file restrictions.
+
+To reduce the number of false positives under the failure category.
+
+To improve reporting transparency for stakeholders and reviewers.
+
+
+
+---
+
+🔹 Impact / Benefits
+
+Provides clearer categorization of error types.
+
+Helps the QA and Analytics teams focus only on true technical failures.
+
+Failure rate now reflects real code or data issues, not external file constraints.
+
+Enables better root cause analysis and tracking of issues over time.
+
+
+
+---
+
+🔹 Implementation Details
+
+Implemented On: (add date, e.g., 24-Oct-2025)
+
+Owner: Data Processing Team
+
+Reviewed By: Quality Assurance & Analytics Teams
+
+Validation: Tested and verified on a representative data batch before rollout.
+
+
+
+---
+
+📘 Tab 2 — Example Case Details (Structured Table)
+
+File Name / ID	Error Type	Old Status	New Status	Cause of Error / Description	Rationale for New Status
+
+doc_12345.docx	Password Protected	Failed	Password Protected (Exception)	Document requires password to open	Intentional restriction, not a system failure
+pdf_67890.pdf	Out of Scope	Failed	Out of Scope (Exception)	Non-supported format (image-only PDF)	Outside extraction scope
+email_001.msg	Failed File Issue	Failed	Successful	Parser logic updated	Logic improvement fixed the issue
+xls_003.xlsx	Password Protected	Failed	Password Protected (Exception)	Encrypted Excel file	Correctly classified as exception
+ppt_009.pptx	Out of Scope	Failed	Out of Scope (Exception)	File not part of extraction target	Properly excluded from failure count
+pdf_1122.pdf	Extraction Error	Failed	Failed	Corrupted file structure	Still a valid technical failure
+
+
+
+---
+
+Would you like me to now generate this entire report as an Excel file (Error_Handling_Change_Report.xlsx) with:
+
+Tab 1: Formatted bullet summary
+
+Tab 2: Table of examples
+
+
+If yes — please confirm:
+
+1. The implementation date you want shown.
+
+
+2. Whether you want me to include a small “Before vs After Metrics” note at the bottom of Tab 2.
+
+
