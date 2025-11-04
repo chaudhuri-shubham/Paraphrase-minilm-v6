@@ -194,3 +194,20 @@ Contributed to broader organisational goals by driving efficiencies at scale —
 Supported initiatives beyond my immediate project scope, collaborating across teams to share frameworks, technical approaches, and reusable components.
 
 Actively aligned team goals with organisational strategy, ensuring safe and sustainable delivery at scale.
+
+
+Future State Architecture & Agile Ways of Working
+
+Actively contributed to embedding the Future State Architecture (FSA) and adopting Agile ways of working within a multidisciplinary setup, ensuring alignment with customer, regulatory, and business outcomes.
+
+Demonstrated strong understanding of Service Value Streams (SVS) and related delivery frameworks, enabling structured execution and outcome-focused delivery.
+
+Created and maintained JIRA tickets for each task, ensuring all activities were traceable, transparent, and completed within defined timelines.
+
+Effectively managed reprioritisation of tasks during high-demand phases to align delivery with critical business priorities.
+
+Ensured timely escalation to managers when issues were identified, enabling early intervention and minimising delivery risks.
+
+Provided regular status updates and progress reports to stakeholders and leadership, ensuring clear visibility and proactive communication throughout project lifecycles.
+
+Consistently met delivery milestones while maintaining high standards of quality, collaboration, and compliance
