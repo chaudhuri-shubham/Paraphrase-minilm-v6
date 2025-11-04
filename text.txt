@@ -108,4 +108,89 @@ If yes — please confirm:
 
 2. Whether you want me to include a small “Before vs After Metrics” note at the bottom of Tab 2.
 
+mmm....mmm....mmm ....mmm ....
 
+
+Technical Excellence
+
+Successfully led the end-to-end development and deployment of multiple analytical solutions, overcoming complex challenges related to evolving data sources and system dependencies.
+
+One of the major projects required a complete shift in data source — several legacy fields became unusable and processing time increased significantly. I redesigned the pipeline, optimised query structures, and implemented automation to restore efficiency and accuracy before deployment.
+
+Managed another large-scale model deployment under the Model Risk Management framework, ensuring appropriate documentation, validation alignment, and compliance with internal governance standards.
+
+Delivered major post-deployment fixes by identifying root causes, optimising logic, and ensuring system stability with minimal downtime.
+
+Developed an additional governance system POC to enable document creation, review, and approval within a single controlled environment — a scalable solution to improve traceability and compliance.
+
+Actively adopted Agile ways of working by creating and tracking JIRA tickets for all tasks, conducting sprint planning, and completing deliverables within defined timelines.
+
+Worked on several ad-hoc analytical requests and rapid POCs to showcase potential solutions to stakeholders under tight deadlines, ensuring timely and impactful delivery.
+
+
+
+---
+
+Risk & Compliance (Colleague Goal)
+
+Ensured alignment with Model Risk Management principles and Data Risk & Controls requirements across all analytical developments and deployments.
+
+Embedded Future State Architecture (FSA) principles into projects to ensure scalability, security, and sustainability of analytical assets.
+
+Maintained high standards of data governance — implementing validation checks, ensuring auditability, and documenting model decisions for regulatory readiness.
+
+Partnered with cross-functional teams to embed risk thinking into every stage of the analytics lifecycle, ensuring proactive identification and mitigation of potential control gaps.
+
+Established stronger governance mechanisms through automation and documentation improvements to support compliant and efficient delivery.
+
+
+
+---
+
+People Orientation, Engagement & Communication
+
+Provided knowledge transfer (KT) sessions and step-by-step guidance to team members, helping them understand project context, data logic, and deployment processes.
+
+Supported multiple teams during testing and integration phases, enabling smoother collaboration and on-time delivery of dependent projects.
+
+Acted on previous year’s feedback by significantly enhancing communication and visibility — I proactively shared updates, progress, and key learnings with both leadership and peers, resulting in stronger engagement and recognition of team achievements.
+
+Promoted a collaborative work environment through open discussions, peer learning, and inclusive problem-solving, which improved team morale and delivery efficiency.
+
+
+
+---
+
+Stakeholder Management
+
+Maintained continuous and structured communication with stakeholders to understand requirements, prioritise tasks, and align deliverables with strategic objectives.
+
+Addressed stakeholder feedback swiftly, ensuring that both development and issue-fixing activities were handled within timelines and aligned with business goals.
+
+Collaborated closely with business and risk teams to ensure solutions met regulatory expectations while achieving operational efficiencies.
+
+Demonstrated consistency in driving common organisational goals by balancing technical feasibility with stakeholder expectations.
+
+
+
+---
+
+Career & Skills Development (Mandatory)
+
+Continued to enhance my technical and leadership capabilities through continuous learning in analytics governance, agile delivery, and data risk management.
+
+Explored new tools and techniques to strengthen project scalability and compliance alignment.
+
+Actively shared learnings within the team to create a culture of continuous growth and improvement.
+
+
+
+---
+
+Organisational Contribution & Optimisation
+
+Contributed to broader organisational goals by driving efficiencies at scale — simplifying existing processes, automating repetitive steps, and improving delivery turnaround time.
+
+Supported initiatives beyond my immediate project scope, collaborating across teams to share frameworks, technical approaches, and reusable components.
+
+Actively aligned team goals with organisational strategy, ensuring safe and sustainable delivery at scale.
