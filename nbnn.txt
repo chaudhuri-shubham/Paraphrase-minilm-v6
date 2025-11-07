@@ -220,3 +220,214 @@ for i, t in enumerate(texts):
     with open(path, "w", encoding=enc, errors="ignore") as f:
         f.write(t)
     print(f"Saved {path} with encoding {enc}")
+
+
+rheheh........????????
+
+
+# ===============================
+# 📘 TXT EXTRACTION COMPARISON SCRIPT
+# ===============================
+
+import os
+import time
+import pandas as pd
+import numpy as np
+import chardet
+import unicodedata
+from ftfy import fix_text
+from fuzzywuzzy import fuzz
+from tqdm import tqdm
+import warnings
+warnings.filterwarnings("ignore")
+
+# ====================================================
+# CONFIGURATION
+# ====================================================
+
+input_folder = "path_to_txt_folder"           # Folder containing all .txt files
+reference_excel = "reference_texts.xlsx"      # Excel with columns: txt_name, reference_text
+output_excel = "txt_extraction_comparison.xlsx"
+
+# ====================================================
+# TEXT NORMALIZATION
+# ====================================================
+
+def normalize_text(text):
+    """Clean BOM, fix encoding issues, normalize unicode."""
+    if not isinstance(text, str):
+        return ""
+    text = text.replace("\ufeff", "")                      # remove BOM
+    text = fix_text(text)                                  # fix encoding errors
+    text = unicodedata.normalize("NFKC", text)             # normalize unicode
+    text = " ".join(text.split())                          # collapse spaces/newlines
+    return text.strip()
+
+# ====================================================
+# EXTRACTION FUNCTIONS
+# ====================================================
+
+def extract_builtin(filepath):
+    """Builtin open() with multiple encoding fallbacks."""
+    encodings = [
+        'utf-8', 'utf-16', 'utf-32', 'latin1', 'cp1252',
+        'iso-8859-1', 'big5', 'shift_jis', 'koi8-r', 'mac_roman'
+    ]
+    for enc in encodings:
+        try:
+            with open(filepath, 'r', encoding=enc, errors='ignore') as f:
+                text = f.read()
+                return normalize_text(text)
+        except Exception:
+            continue
+    return ""
+
+def extract_chardet(filepath):
+    """Detect encoding using chardet and decode accordingly."""
+    with open(filepath, 'rb') as f:
+        raw = f.read()
+    result = chardet.detect(raw)
+    enc = result['encoding'] or 'utf-8'
+    try:
+        text = raw.decode(enc, errors='ignore')
+    except Exception:
+        for fb in ['utf-8', 'latin1', 'utf-16', 'utf-32']:
+            try:
+                text = raw.decode(fb, errors='ignore')
+                break
+            except:
+                text = ""
+    return normalize_text(text)
+
+def extract_ftfy(filepath):
+    """Builtin open() + ftfy to fix garbled text."""
+    text = extract_builtin(filepath)
+    return normalize_text(text)
+
+def extract_textract(filepath):
+    """Extract text using textract."""
+    import textract
+    try:
+        text = textract.process(filepath).decode('utf-8', errors='ignore')
+        return normalize_text(text)
+    except Exception:
+        return ""
+
+# ====================================================
+# METRIC CALCULATION
+# ====================================================
+
+def compute_metrics(extracted, reference, time_taken):
+    """Compute evaluation metrics for extracted vs reference text."""
+    extracted = normalize_text(extracted)
+    reference = normalize_text(reference)
+
+    if len(reference) == 0:
+        return {k: 0 for k in [
+            "seq_accuracy", "fuzzy_accuracy", "noise_ratio",
+            "completeness", "duplicate_ratio", "length",
+            "word_count", "time_taken"
+        ]}
+
+    seq_accuracy = fuzz.token_sort_ratio(reference, extracted) / 100
+    fuzzy_accuracy = fuzz.partial_ratio(reference, extracted) / 100
+
+    # Noise ratio: extra chars not present in reference
+    extra_chars = max(0, len(extracted) - len(reference))
+    noise_ratio = extra_chars / max(len(extracted), 1)
+
+    # Completeness: portion of reference covered
+    completeness = min(len(extracted) / len(reference), 1.0)
+
+    # Duplicate ratio
+    words = extracted.split()
+    duplicate_ratio = 1 - (len(set(words)) / max(len(words), 1))
+
+    # Length & word count
+    text_length = len(extracted)
+    word_count = len(words)
+
+    return {
+        "seq_accuracy": seq_accuracy,
+        "fuzzy_accuracy": fuzzy_accuracy,
+        "noise_ratio": noise_ratio,
+        "completeness": completeness,
+        "duplicate_ratio": duplicate_ratio,
+        "length": text_length,
+        "word_count": word_count,
+        "time_taken": time_taken
+    }
+
+# ====================================================
+# MAIN COMPARISON
+# ====================================================
+
+extractors = {
+    "builtin_open": extract_builtin,
+    "chardet_open": extract_chardet,
+    "ftfy_builtin": extract_ftfy,
+    "textract": extract_textract
+}
+
+reference_df = pd.read_excel(reference_excel)
+summary_data = []
+error_data = []
+
+for extractor_name, extractor_func in extractors.items():
+    print(f"\n🔹 Processing with {extractor_name} ...")
+    results = []
+
+    for _, row in tqdm(reference_df.iterrows(), total=len(reference_df)):
+        txt_name = row['txt_name']
+        ref_text = str(row['reference_text'])
+        file_path = os.path.join(input_folder, txt_name)
+
+        if not os.path.exists(file_path):
+            error_data.append({
+                "extractor": extractor_name,
+                "file": txt_name,
+                "error": "File not found"
+            })
+            continue
+
+        start = time.time()
+        try:
+            extracted = extractor_func(file_path)
+            end = time.time()
+            time_taken = end - start
+
+            metrics = compute_metrics(extracted, ref_text, time_taken)
+            results.append({
+                "txt_name": txt_name,
+                "extracted_text": extracted,
+                **metrics
+            })
+        except Exception as e:
+            error_data.append({
+                "extractor": extractor_name,
+                "file": txt_name,
+                "error": str(e)
+            })
+
+    df_results = pd.DataFrame(results)
+    summary_row = df_results.mean(numeric_only=True)
+    summary_row["extractor"] = extractor_name
+    summary_data.append(summary_row)
+
+    # Save per-extractor results
+    mode = 'a' if os.path.exists(output_excel) else 'w'
+    with pd.ExcelWriter(output_excel, engine='openpyxl', mode=mode) as writer:
+        df_results.to_excel(writer, sheet_name=extractor_name[:30], index=False)
+
+# ====================================================
+# SUMMARY AND ERROR LOGS
+# ====================================================
+
+summary_df = pd.DataFrame(summary_data)
+error_df = pd.DataFrame(error_data)
+
+with pd.ExcelWriter(output_excel, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+    error_df.to_excel(writer, sheet_name='Errors', index=False)
+
+print("\n✅ TXT extraction comparison completed successfully!")
