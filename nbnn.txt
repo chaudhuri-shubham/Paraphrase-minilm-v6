@@ -159,3 +159,64 @@ This year, I demonstrated strong ownership and technical excellence, delivering 
 ---
 
 Would you like me to make this slightly shorter (for HR system entry) — same 3-section structure but condensed to about 10–12 high-impact bullets total for a performance form?
+
+
+
+
+....d dnd ddnd. ...djdnd d .ddndndnd....
+
+
+# Example text
+text = "Café naïve résumé – this has special characters!"
+
+# Different encodings to simulate
+encodings = ['utf-8', 'utf-16', 'utf-32', 'latin1', 'cp1252', 'iso-8859-1', 'big5', 'koi8-r']
+
+# Folder to save test files
+import os
+os.makedirs("encoded_txt_samples", exist_ok=True)
+
+for enc in encodings:
+    filename = f"encoded_txt_samples/sample_{enc}.txt"
+    try:
+        with open(filename, "w", encoding=enc, errors="ignore") as f:
+            f.write(text)
+        print(f"✅ Saved: {filename}")
+    except Exception as e:
+        print(f"❌ Failed for {enc}: {e}")
+
+
+
+.......
+
+
+import chardet
+
+for file in os.listdir("encoded_txt_samples"):
+    path = os.path.join("encoded_txt_samples", file)
+    with open(path, "rb") as f:
+        raw = f.read()
+    result = chardet.detect(raw)
+    print(f"{file}: detected as {result}")
+
+..........
+
+import random
+
+encodings = ['utf-8', 'utf-16', 'cp1252', 'latin1', 'utf-32']
+texts = [
+    "Résumé of José",
+    "Текст на русском",
+    "日本語のテキスト",
+    "中文内容",
+    "Français et caractères spéciaux – œ, é, à"
+]
+
+os.makedirs("mixed_encodings", exist_ok=True)
+
+for i, t in enumerate(texts):
+    enc = random.choice(encodings)
+    path = f"mixed_encodings/file_{i+1}_{enc}.txt"
+    with open(path, "w", encoding=enc, errors="ignore") as f:
+        f.write(t)
+    print(f"Saved {path} with encoding {enc}")
