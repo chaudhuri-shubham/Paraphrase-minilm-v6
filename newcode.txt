@@ -688,3 +688,167 @@ with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
         df_err.to_excel(writer, sheet_name="Errors", index=False)
 
 print(f"\n✅ All processing done. Detailed report saved to: {output_excel}")
+
+
+....r.t.t.t.t.t.t..t.t.t.t.t.t.t.t.t......
+
+import os
+import time
+import pandas as pd
+import numpy as np
+import chardet
+from ftfy import fix_text
+from fuzzywuzzy import fuzz
+from tqdm import tqdm
+import warnings
+warnings.filterwarnings("ignore")
+
+# ==========================
+# CONFIGURATION
+# ==========================
+input_folder = "path_to_txt_folder"      # Folder containing all .txt files
+reference_excel = "reference_texts.xlsx" # Excel file with manual text (columns: ppt_name, reference_text)
+output_excel = "txt_extraction_comparison.xlsx"
+
+# ==========================
+# EXTRACTION FUNCTIONS
+# ==========================
+
+def extract_builtin(filepath):
+    """Builtin open() assuming UTF-8, fallback to common encodings."""
+    encodings = ['utf-8', 'latin1', 'utf-16', 'cp1252']
+    for enc in encodings:
+        try:
+            with open(filepath, 'r', encoding=enc) as f:
+                return f.read()
+        except:
+            continue
+    return ""
+
+def extract_chardet(filepath):
+    """Use chardet to detect encoding first."""
+    with open(filepath, 'rb') as f:
+        raw = f.read()
+    enc = chardet.detect(raw)['encoding']
+    if not enc:
+        enc = 'utf-8'
+    try:
+        return raw.decode(enc)
+    except:
+        return raw.decode('latin1', errors='ignore')
+
+def extract_textract(filepath):
+    """Textract extraction."""
+    import textract
+    try:
+        text = textract.process(filepath).decode('utf-8')
+        return text
+    except Exception as e:
+        return ""
+
+def extract_ftfy(filepath):
+    """Use ftfy to fix encoding issues from builtin extraction."""
+    text = extract_builtin(filepath)
+    return fix_text(text)
+
+# ==========================
+# METRIC FUNCTIONS
+# ==========================
+
+def compute_metrics(extracted, reference, time_taken):
+    """Compute text extraction metrics."""
+    # Clean
+    extracted = extracted.strip()
+    reference = reference.strip()
+
+    # Avoid divide by zero
+    if len(reference) == 0:
+        return {k: 0 for k in ["seq_accuracy", "fuzzy_accuracy", "noise_ratio", "completeness", "duplicate_ratio", "length", "word_count", "time_taken"]}
+
+    # Metrics
+    seq_accuracy = fuzz.token_sort_ratio(reference, extracted) / 100
+    fuzzy_accuracy = fuzz.partial_ratio(reference, extracted) / 100
+
+    # Noise ratio (extra characters not in reference)
+    extra_chars = max(0, len(extracted) - len(reference))
+    noise_ratio = extra_chars / max(len(extracted), 1)
+
+    # Completeness (portion of reference found)
+    completeness = min(len(extracted) / len(reference), 1.0)
+
+    # Duplicate ratio
+    words = extracted.split()
+    duplicate_ratio = 1 - (len(set(words)) / max(len(words), 1))
+
+    # Text length and word count
+    text_length = len(extracted)
+    word_count = len(words)
+
+    return {
+        "seq_accuracy": seq_accuracy,
+        "fuzzy_accuracy": fuzzy_accuracy,
+        "noise_ratio": noise_ratio,
+        "completeness": completeness,
+        "duplicate_ratio": duplicate_ratio,
+        "length": text_length,
+        "word_count": word_count,
+        "time_taken": time_taken
+    }
+
+# ==========================
+# MAIN COMPARISON LOOP
+# ==========================
+
+extractors = {
+    "builtin_open": extract_builtin,
+    "chardet_open": extract_chardet,
+    "textract": extract_textract,
+    "ftfy_builtin": extract_ftfy
+}
+
+reference_df = pd.read_excel(reference_excel)
+summary_data = []
+error_data = []
+
+for extractor_name, extractor_func in extractors.items():
+    results = []
+    print(f"Processing with {extractor_name}...")
+    
+    for _, row in tqdm(reference_df.iterrows(), total=len(reference_df)):
+        ppt_name = row['ppt_name']
+        ref_text = str(row['reference_text'])
+        ppt_path = os.path.join(input_folder, ppt_name)
+
+        if not os.path.exists(ppt_path):
+            error_data.append({"extractor": extractor_name, "file": ppt_name, "error": "File not found"})
+            continue
+
+        start = time.time()
+        try:
+            extracted = extractor_func(ppt_path)
+            end = time.time()
+            time_taken = end - start
+
+            metrics = compute_metrics(extracted, ref_text, time_taken)
+            results.append({"ppt_name": ppt_name, "extracted_text": extracted, **metrics})
+        except Exception as e:
+            error_data.append({"extractor": extractor_name, "file": ppt_name, "error": str(e)})
+    
+    df_results = pd.DataFrame(results)
+    df_results.to_excel(output_excel, sheet_name=extractor_name[:30], index=False)
+    summary_row = df_results.mean(numeric_only=True)
+    summary_row["extractor"] = extractor_name
+    summary_data.append(summary_row)
+
+# ==========================
+# FINAL SUMMARY CREATION
+# ==========================
+
+summary_df = pd.DataFrame(summary_data)
+error_df = pd.DataFrame(error_data)
+
+with pd.ExcelWriter(output_excel, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+    error_df.to_excel(writer, sheet_name='Errors', index=False)
+
+print("✅ Extraction and comparison completed successfully!")
