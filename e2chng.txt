@@ -374,3 +374,135 @@ def check_file_content(file_path):
     else:
         print("Unsupported file format:", ext)
         return 0
+
+
+jdjdhdhdjd.....djdbdhdj...hddhdhdhdh
+
+
+import os
+import fitz                     # for PDF
+from docx import Document       # for DOCX
+import extract_msg              # for MSG
+
+
+# ---------------------------
+# Custom Exception
+# ---------------------------
+class OnlyImageNoTextError(Exception):
+    """Raised when a file contains only images and no text."""
+    pass
+
+
+# ---------------------------
+# Helper: Check PDF
+# ---------------------------
+def _pdf_check(file_path):
+    has_text = 0
+    has_image = 0
+
+    doc = fitz.open(file_path)
+
+    for page in doc:
+        # check text
+        if page.get_text(strip=True):
+            has_text = 1
+
+        # check images
+        if page.get_images(full=True):
+            has_image = 1
+
+    return has_text, has_image
+
+
+# ---------------------------
+# Helper: Check DOCX
+# ---------------------------
+def _docx_check(file_path):
+    has_text = 0
+    has_image = 0
+
+    doc = Document(file_path)
+
+    # text check
+    full_text = "\n".join([para.text for para in doc.paragraphs])
+    if full_text.strip():
+        has_text = 1
+
+    # images check
+    for rel in doc.part._rels:
+        target = doc.part._rels[rel].target_ref
+        if any(target.lower().endswith(ext) for ext in
+               (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp")):
+            has_image = 1
+
+    return has_text, has_image
+
+
+# ---------------------------
+# Helper: Check MSG
+# ---------------------------
+def _msg_check(file_path):
+    has_text = 0
+    has_image = 0
+
+    msg = extract_msg.Message(file_path)
+
+    # text check
+    body = msg.body or ""
+    if body.strip():
+        has_text = 1
+
+    # attachments (MSG stores embedded images as attachments)
+    image_exts = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp")
+
+    for att in msg.attachments:
+        name = (att.longFilename or att.shortFilename or "").lower()
+        if name.endswith(image_exts):
+            has_image = 1
+
+    return has_text, has_image
+
+
+# ---------------------------
+# MAIN UNIVERSAL CHECKER FUNCTION
+# ---------------------------
+def analyze_file_for_image_text(file_path):
+    """
+    Call this inside your EXCEPTION block.
+    Checks whether file has text, images, or only images.
+    Raises OnlyImageNoTextError when only images present.
+    """
+
+    ext = os.path.splitext(file_path)[-1].lower()
+
+    if ext == ".pdf":
+        has_text, has_image = _pdf_check(file_path)
+
+    elif ext == ".docx":
+        has_text, has_image = _docx_check(file_path)
+
+    elif ext == ".msg":
+        has_text, has_image = _msg_check(file_path)
+
+    else:
+        raise ValueError("Unsupported file type for fallback check.")
+
+    # --------- CUSTOM EXCEPTION ---------
+    if has_image == 1 and has_text == 0:
+        raise OnlyImageNoTextError("File contains only images and no text.")
+
+    # normal return
+    return {
+        "has_image": has_image,
+        "has_text": has_text
+    }
+
+try:
+    extracted_text = extract_pdf_or_msg_or_docx(...)
+except Exception as e:
+    # Fallback analysis
+    res = analyze_file_for_image_text(file_path)
+    print(res)
+
+
+OnlyImageNoTextError: File contains only images and no text.
