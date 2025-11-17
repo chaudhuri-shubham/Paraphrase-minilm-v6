@@ -1,0 +1,47 @@
+import fitz  # PyMuPDF
+
+def check_pdf_has_image(file_path):
+    try:
+        doc = fitz.open(file_path)
+        for page in doc:
+            if page.get_images(full=True):
+                return 1  # image found
+        return 0  # no images
+    except:
+        return 0
+
+import extract_msg
+
+def check_msg_has_image(file_path):
+    try:
+        msg = extract_msg.Message(file_path)
+        msg.extract()
+
+        image_exts = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp")
+
+        for att in msg.attachments:
+            name = (att.longFilename or att.shortFilename or "").lower()
+            if name.endswith(image_exts):
+                return 1  # image found
+
+        return 0  # no images
+    except:
+        return 0
+
+
+from docx import Document
+
+def check_docx_has_image(file_path):
+    try:
+        doc = Document(file_path)
+
+        # Images in docx are stored under document.part.related_parts
+        for rel in doc.part._rels:
+            target = doc.part._rels[rel].target_ref
+            if any(target.lower().endswith(ext) 
+                   for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp")):
+                return 1  # image found
+
+        return 0
+    except:
+        return 0
