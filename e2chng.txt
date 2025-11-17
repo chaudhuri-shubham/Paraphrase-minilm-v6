@@ -45,3 +45,12 @@ def check_docx_has_image(file_path):
         return 0
     except:
         return 0
+
+
+import easyocr
+
+reader = easyocr.Reader(['en'])   # add languages if needed
+result = reader.readtext('image.png')
+
+text = " ".join([res[1] for res in result])
+print(text)
