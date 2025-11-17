@@ -506,3 +506,28 @@ except Exception as e:
 
 
 OnlyImageNoTextError: File contains only images and no text.
+
+
+.......f.f.f.f .f.f.f.f.f.f.f.f.f.f.f.f..........
+
+
+from paddleocr import PaddleOCR
+import os
+
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
+
+def ocr_image_paddle(file_name):
+    if not os.path.exists(file_name):
+        return 0, ""
+
+    result = ocr.ocr(file_name, cls=True)
+    extracted = []
+
+    if result and result[0]:
+        for line in result[0]:
+            extracted.append(line[1][0])
+
+    if extracted:
+        return 1, " ".join(extracted)
+    else:
+        return 0, ""
