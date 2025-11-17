@@ -223,3 +223,154 @@ def check_file_content(file_path):
     else:
         print("Unsupported file format:", ext)
         return 0
+
+
+kkkkkkkkkkkkkkkkkk
+
+import os
+import fitz               # PyMuPDF
+import extract_msg        # MSG reader
+from docx import Document
+
+
+# -------------------------------------------------------
+# PDF CHECK — PyMuPDF
+# -------------------------------------------------------
+def check_pdf_content(file_path):
+    """
+    Returns 1 ONLY IF:
+      - PDF has embedded images AND no extractable text
+    """
+    try:
+        doc = fitz.open(file_path)
+    except Exception as e:
+        print("PDF open error:", e)
+        return 0
+
+    has_image = False
+    text_length = 0
+
+    for page in doc:
+        # --- IMAGE CHECK ---
+        images = page.get_images(full=True)
+        if images:
+            has_image = True
+
+        # --- TEXT CHECK ---
+        text = page.get_text("text").strip()
+        if text:
+            text_length += len(text)
+
+    if has_image and text_length == 0:
+        return 1
+    return 0
+
+
+
+# -------------------------------------------------------
+# MSG CHECK — extract_msg (NO extract(), NO BeautifulSoup)
+# -------------------------------------------------------
+def check_msg_content(file_path):
+    """
+    Returns 1 ONLY IF:
+      - MSG contains images (inline or attachment)
+      - AND email has no text (plain or html)
+    """
+
+    try:
+        msg = extract_msg.Message(file_path)
+    except Exception as e:
+        print("MSG open error:", e)
+        return 0
+
+    has_image = False
+    text_length = 0
+
+    # --------- TEXT CHECK (no HTML parsing) ---------
+    if msg.body:
+        text_length += len(msg.body.strip())
+
+    if msg.htmlBody:
+        # treat HTML as raw text - no BeautifulSoup
+        raw_html = msg.htmlBody.strip()
+        # remove < > to avoid counting tags as text
+        cleaned = raw_html.replace("<", " ").replace(">", " ").strip()
+        text_length += len(cleaned)
+
+    # --------- IMAGE CHECK (attachments + inline) ---------
+    image_exts = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp")
+
+    for att in msg.attachments:
+        name = (att.longFilename or att.shortFilename or "").lower()
+        if name.endswith(image_exts):
+            has_image = True
+
+    if has_image and text_length == 0:
+        return 1
+    return 0
+
+
+
+# -------------------------------------------------------
+# DOCX CHECK — python-docx
+# -------------------------------------------------------
+def check_docx_content(file_path):
+    """
+    Returns 1 ONLY IF:
+      - DOCX has embedded images
+      - AND document has no text
+    """
+    try:
+        doc = Document(file_path)
+    except Exception as e:
+        print("DOCX open error:", e)
+        return 0
+
+    has_image = False
+    text_length = 0
+
+    # --- IMAGE CHECK (embedded images, not attachments) ---
+    for rel in doc.part._rels.values():
+        try:
+            part = rel.target_part
+            if hasattr(part, "content_type"):
+                if part.content_type.startswith("image/"):
+                    has_image = True
+        except:
+            pass
+
+    # --- TEXT CHECK ---
+    for para in doc.paragraphs:
+        if para.text.strip():
+            text_length += len(para.text.strip())
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    text_length += len(cell.text.strip())
+
+    if has_image and text_length == 0:
+        return 1
+    return 0
+
+
+
+# -------------------------------------------------------
+# MASTER FUNCTION
+# -------------------------------------------------------
+def check_file_content(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".pdf":
+        return check_pdf_content(file_path)
+
+    elif ext == ".msg":
+        return check_msg_content(file_path)
+
+    elif ext == ".docx":
+        return check_docx_content(file_path)
+
+    else:
+        print("Unsupported file format:", ext)
+        return 0
