@@ -54,3 +54,12 @@ result = reader.readtext('image.png')
 
 text = " ".join([res[1] for res in result])
 print(text)
+
+
+from paddleocr import PaddleOCR
+
+ocr = PaddleOCR(lang='en')
+result = ocr.ocr('image.jpg')
+
+text = " ".join([line[1][0] for line in result[0]])
+print(text)
