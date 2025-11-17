@@ -1,3 +1,27 @@
+from PIL import Image
+import pytesseract
+
+def extract_text_pytesseract(image_path):
+    try:
+        # open the image
+        img = Image.open(image_path)
+
+        # extract text
+        text = pytesseract.image_to_string(img)
+
+        return text.strip()
+
+    except Exception as e:
+        print("Error:", e)
+        return ""
+
+
+
+
+
+
+.............
+
 import fitz  # PyMuPDF
 
 def check_pdf_has_image(file_path):
