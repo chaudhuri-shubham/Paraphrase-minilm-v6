@@ -1,0 +1,350 @@
+Below is a very detailed POC plan document, structured exactly as you asked:
+Task → Sub-Tasks → Days Needed → Comments.
+This covers:
+
+Phase 1 (Current + expansions: pptx, txt, xlsx, csv)
+
+Semantic search migration
+
+Vector DB migration (PostgreSQL + pgvector)
+
+Architecture, logging, monitoring, testing, deployment
+
+Hyper-detailed subtasks for every section
+
+
+You can directly copy-paste this into a document.
+
+
+---
+
+POC PLAN DOCUMENT – DOCUMENT SEARCH PROJECT (DETAILED)
+
+Goal:
+
+Build a scalable semantic document search system, supporting PDF, DOCX, MSG, PPTX, TXT, XLSX, CSV formats, with embeddings stored in PostgreSQL-pgvector.
+
+
+---
+
+1. Project Initialization & Requirement Finalisation
+
+Main Task 1.1 – Requirement Gathering
+
+Sub-Task	Days	Comments
+
+Identify all input file formats: pdf, docx, msg, pptx, txt, xlsx, csv	1	Freeze initial formats for POC
+Identify maximum file size, number of documents, average size	1	Needed for performance tuning
+Define search use-case types (keyword, semantic, phrase, partial)	0.5	This will drive chunking strategy
+Define expected POC output format (doc list, snippet, score)	0.5	Helps building UI/JSON structure
+Document all edge cases (image-based PDF, encrypted files, empty files)	1	Needed for exception framework
+
+
+
+---
+
+2. Architecture & Solution Design
+
+Main Task 2.1 – High-Level Architecture Creation
+
+Sub-Task	Days	Comments
+
+Create ingestion → extraction → embedding → storage → search flow	1	Basic POC blueprint
+Decide modular design: separate extractors per format	0.5	Helps scaling
+Define batch vs real-time ingestion	0.5	POC likely batch
+Define API architecture for search	0.5	Flask/FastAPI recommended
+
+
+Main Task 2.2 – Detailed Low-Level Architecture (LLD)
+
+Sub-Task	Days	Comments
+
+Define extractor interface (one base class, child for each file type)	1	Ensures consistency
+Create chunking strategy diagram	0.5	Overlapping, by tokens
+Define embedding workflow	0.5	Use sentence-transformers or OpenAI
+Define PostgreSQL schema for vector + metadata	1	Using pgvector
+Identify folders for logs, output, failed docs	0.5	Needed for pipeline
+
+
+
+---
+
+3. Extraction Layer Enhancement (Phase 2 formats included)
+
+Main Task 3.1 – pptx Extraction
+
+Sub-Task	Days	Comments
+
+Text extraction from slides (python-pptx)	1	Extract title, body
+Extract notes section	0.5	Useful for semantic search
+Merge extracted content slide-wise	0.5	Maintain mapping for search result
+Error handling: corrupted pptx	0.5	Write try–except blocks
+
+
+Main Task 3.2 – txt Extraction
+
+Sub-Task	Days	Comments
+
+Simple text read implementation	0.2	Very fast
+Encoding handling (utf-8, latin, cp1252)	0.5	Add fallback logic
+Large file handling	0.5	Stream read when >10MB
+
+
+Main Task 3.3 – xlsx Extraction
+
+Sub-Task	Days	Comments
+
+Row-wise text extraction (openpyxl)	1	Extract all sheets
+Handling merged cells	0.5	Extract content correctly
+Handling formula cells (ignore or extract computed values)	0.5	Decide final policy
+Extract only text cells, skip numeric-heavy data	0.5	Speeds up and improves quality
+
+
+Main Task 3.4 – csv Extraction
+
+Sub-Task	Days	Comments
+
+Delimiter detection (comma, semicolon, tab)	0.5	Use csv.Sniffer
+Reading line by line for large files	0.5	Avoid memory issue
+Convert rows into meaningful paragraphs	0.5	Improve embedding quality
+
+
+Main Task 3.5 – Common Extraction Framework
+
+Sub-Task	Days	Comments
+
+Create a common extract_document(file_path) function	1	Calls specific module
+Add metadata extraction (filename, extension, size)	0.5	Store in DB
+Add exception handling layer	0.5	Return standardized errors
+Logging for success, fail, partial extraction	0.5	Unified logs
+
+
+
+---
+
+4. Chunking Strategy Finalisation
+
+Main Task 4.1 – Methodology Validation
+
+Sub-Task	Days	Comments
+
+Compare strategies: fixed words, tokens, sliding window	1	Run tests
+Decide window size (300–500 tokens recommended)	1	Based on embedding model
+Decide overlap percentage (20–30%)	0.5	For improved recall
+Test chunking on different formats	1	Practical validation
+
+
+Main Task 4.2 – Finalising Chunking
+
+Sub-Task	Days	Comments
+
+Implement final chunking code	1	Tokeniser-based
+Integration with all extractors	1	End-to-end flow
+
+
+
+---
+
+5. Embedding Layer – Semantic Search Migration
+
+Main Task 5.1 – Embedding Methodology Finalisation
+
+Sub-Task	Days	Comments
+
+Compare models: sentence-transformers, all-mpnet-base, OpenAI	1.5	Benchmark
+Validate speed, cost, accuracy	1	Select best
+Create a benchmarking dataset	0.5	10–20 documents
+
+
+Main Task 5.2 – Embedding Pipeline Implementation
+
+Sub-Task	Days	Comments
+
+Implement embed_chunks(chunks) function	1	Batch-wise
+Add GPU support switching (optional)	0.5	For scaling
+Add retry mechanism for failed embeddings	0.5	Avoid pipeline crash
+
+
+
+---
+
+6. Database Migration to PostgreSQL + pgvector
+
+Main Task 6.1 – DB Setup
+
+Sub-Task	Days	Comments
+
+Install PostgreSQL	0.5	Local or VM
+Install pgvector extension	0.5	CREATE EXTENSION
+Create database + tables	0.5	Doc table + vector table
+
+
+Main Task 6.2 – DB Schema Design
+
+Sub-Task	Days	Comments
+
+documents table (id, filename, metadata)	0.5	Basic schema
+chunks table (chunk_id, doc_id, chunk_text)	0.5	Mapping
+vectors table (chunk_id, embedding_vector)	0.5	Vector type
+Create indexes (HNSW, ivfflat)	0.5	Performance
+
+
+Main Task 6.3 – DB Integration
+
+Sub-Task	Days	Comments
+
+Insert extracted chunks	0.5	Store raw chunks
+Insert embeddings into pgvector	1	768-dim example
+Build similarity query logic	0.5	vector <-> query
+
+
+
+---
+
+7. Search API – Keyword + Semantic
+
+Main Task 7.1 – Keyword Search
+
+Sub-Task	Days	Comments
+
+Exact keyword search using LIKE	0.5	Baseline
+Fuzzy search using trigram index	1	Alternative to rapidfuzz
+Highlight snippet creation	1	Show results cleanly
+
+
+Main Task 7.2 – Semantic Search
+
+Sub-Task	Days	Comments
+
+Embed query text	0.5	Reuse embedding model
+Vector similarity search (cosine distance)	1	Top K results
+Merge + rank documents by score	1	Weighted scoring
+Prepare final JSON result structure	0.5	Output API
+
+
+
+---
+
+8. UI or Minimal Interface (Optional in POC)
+
+Sub-Task	Days	Comments
+
+Simple frontend using Streamlit/Flask	1	Search box + results
+Display document name + snippet	1	User friendly
+Add result filters: file type, date	0.5	Optional
+
+
+
+---
+
+9. Logging, Monitoring & Exception Design
+
+Main Task 9.1 – Logging Framework
+
+Sub-Task	Days	Comments
+
+Create central logger	1	Rotating log files
+Add logs for extraction, chunking, embedding	1	For tracing
+Error categorization (format-error, text-error, db-error)	0.5	Faster debugging
+
+
+Main Task 9.2 – Exception Handling
+
+Sub-Task	Days	Comments
+
+Custom extraction exceptions	0.5	FormatNotSupported, NoTextException
+Retry logic for transient failures	0.5	db retry
+Logging failed files with reasons	0.5	Stored in CSV
+
+
+
+---
+
+10. Testing Strategy
+
+Main Task 10.1 – Unit Testing
+
+Sub-Task	Days	Comments
+
+Tests for extractors	1	Each file type
+Tests for chunking	0.5	Boundary tests
+Tests for embeddings	0.5	Output shape tests
+
+
+Main Task 10.2 – Integration Testing
+
+Sub-Task	Days	Comments
+
+End-to-end test (upload → search)	1	Must validate flow
+Search relevance testing	1	Manual relevance check
+Performance testing (1000 docs)	1	Response time
+
+
+
+---
+
+11. Deployment Plan
+
+Main Task 11.1 – Local ↣ UAT Setup
+
+Sub-Task	Days	Comments
+
+dockerize app & PostgreSQL	1	Reproducible environment
+Migration scripts	0.5	For DB setup
+Automated ingestion cron job	0.5	Nightly or manual
+
+
+Main Task 11.2 – Production-Ready Additions (Optional)
+
+Sub-Task	Days	Comments
+
+API auth using JWT	0.5	Secure
+Role-based access	0.5	Optional
+Monitoring dashboards (Grafana)	1	Track failures
+
+
+
+---
+
+12. Documentation & Handover
+
+Main Task 12.1 – Technical Documentation
+
+Sub-Task	Days	Comments
+
+Architecture explanation	1	High + Low level
+Code walkthrough	1	Module wise
+Search algorithm notes	0.5	For future dev
+DB schema documentation	0.5	ER diagram
+
+
+Main Task 12.2 – User Training Document
+
+Sub-Task	Days	Comments
+
+How to upload documents	0.5	Simple
+How to search	0.5	Use screenshots
+Troubleshooting guide	0.5	FAQs
+
+
+
+---
+
+Total Estimated Time
+
+Approx. 35–40 Working Days
+
+(Depending on team size and parallelization possibilities.)
+
+
+---
+
+If you want, I can also generate:
+
+✅ A clean tabular format
+✅ A shorter project manager–ready version
+✅ A technical architecture diagram
+✅ Pseudocode for the entire pipeline
+✅ Code templates for extractor, chunker, embedder, vector search
+
+Just tell me what you need.
