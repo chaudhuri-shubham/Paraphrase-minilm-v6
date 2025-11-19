@@ -33,3 +33,356 @@ We will not provide infrastructure for development.
 Need to use your personal system.
 For screening, can keep screenshots for the prototype.
 Level 1 and Level 2, Demo can be done through zoom meeting and your personal system or office laptop based on your development device.
+
+
+nnnnmmmm.................
+
+
+import streamlit as st
+import pandas as pd
+import random
+import time
+import json
+
+# --- Core Financial Data and Configuration (Adjusted for INR) ---
+
+GOAL_NAME = "First Home Down Payment Fund"
+GOAL_TARGET = 5000000.00 # 50 Lakhs INR
+GOAL_DEADLINE_YEAR = 2026
+RISK_THRESHOLD_PERCENT = 0.90 
+RISKY_AMOUNT_DEFAULT = 650000.00 # Default amount used to trigger the Nudge (6.5 Lakhs)
+
+# Initial balances
+INITIAL_BALANCES = {
+    'Joint Checking': 4550000.00, # 45.5 Lakhs (Goal Balance)
+    'Discretionary Savings': 1000000.00, # 10 Lakhs
+    'Partner\'s Account': 50000.00, # 50K (Simulated Partner Contribution)
+}
+
+# Simulated Transaction Data for Insight Generation (Last 30 Days) - Adjusted for INR
+EXPENSE_DATA = {
+    'Category': ['Groceries', 'Groceries', 'Dining Out', 'Dining Out', 'Rent/Mortgage', 'Utilities', 'Subscription', 'Travel', 'Groceries', 'Shopping', 'Investment', 'Investment'],
+    'Amount': [4500.00, 11050.00, 6500.00, 4000.00, 50000.00, 15000.00, 1500.00, 32000.00, 9500.00, 20000.00, 10000.00, 5000.00],
+    'Date': pd.to_datetime(['2025-11-15', '2025-11-10', '2025-11-13', '2025-11-08', '2025-11-01', '2025-10-28', '2025-11-18', '2025-11-14', '2025-11-03', '2025-11-07', '2025-11-02', '2025-11-06'])
+}
+df_expenses = pd.DataFrame(EXPENSE_DATA)
+
+
+# --- Logic Functions for the 5 Layers ---
+
+# 3. Nudge Logic (Protect)
+def check_transaction_risk(source_account, amount):
+    """Checks if the transaction derails the goal."""
+    if source_account != 'Joint Checking':
+        return False, st.session_state.balances['Joint Checking'], "None"
+
+    current_goal_balance = st.session_state.balances['Joint Checking']
+    balance_after = current_goal_balance - amount
+    
+    is_risky = balance_after < (GOAL_TARGET * RISK_THRESHOLD_PERCENT)
+    
+    # Simple simulation for delay: 9 months for a 6.5 Lakhs hit.
+    delay_factor = amount / RISKY_AMOUNT_DEFAULT
+    simulated_delay = f"{round(delay_factor * 9, 0)} months" if is_risky else "None"
+        
+    return is_risky, balance_after, simulated_delay
+
+def execute_transfer(source, target, amount):
+    """Executes the transaction and updates balances."""
+    if st.session_state.balances[source] >= amount:
+        st.session_state.balances[source] -= amount
+        st.session_state.status_message = f"✅ Success! Transferred ₹{amount:,.2f} from {source}."
+    else:
+        st.session_state.status_message = "❌ Error: Insufficient funds."
+
+def handle_reallocation(risky_amount):
+    """Handles the Nudge-recommended reallocation."""
+    source_risky = 'Joint Checking'
+    source_safe = 'Discretionary Savings'
+    
+    if st.session_state.balances[source_safe] >= risky_amount:
+        st.session_state.balances[source_safe] -= risky_amount
+        st.session_state.balances[source_risky] += risky_amount
+        
+        st.session_state.status_message = f"""
+        ✨ **REALLOCATION SUCCESS!** ✨ The ₹{risky_amount:,.2f} purchase was completed using **{source_safe}**.
+        Your **{GOAL_NAME}** fund is protected!
+        """
+        st.session_state.is_risky_transaction = False
+    else:
+        st.session_state.status_message = "❌ Error: Insufficient funds in Discretionary Savings."
+
+# 1. Transaction Insights Logic (Analyze)
+def generate_financial_insight(user_query, expense_df):
+    """Generates hardcoded, simulated financial insights."""
+    user_query = user_query.lower()
+    
+    # Calculate monthly summary for contextual data
+    monthly_summary = expense_df.groupby('Category')['Amount'].sum().reset_index()
+    
+    # Logic to provide tailored insights based on query
+    if "groceries" in user_query or "food" in user_query:
+        # Groceries Insight: Assume typical monthly spend is 25,000 INR
+        try:
+            groceries_total = monthly_summary[monthly_summary['Category'] == 'Groceries']['Amount'].iloc[0]
+        except:
+            groceries_total = 0.00
+            
+        overage = max(0, groceries_total - 25000.00) 
+        
+        return (
+            f"**Actionable Groceries Insight:** You spent **₹{groceries_total:,.2f}** this month. "
+            f"Your average is usually ₹25,000. Cutting this **₹{overage:,.2f}** overage could be put directly "
+            f"into your '{GOAL_NAME}' fund! **Recommendation:** Plan meals and commit to a 'no-spend' cooking day weekly."
+        )
+    elif "dining" in user_query or "restaurant" in user_query:
+        # Dining Out Insight: Assume cutting 2-3 trips saves 10,000 INR
+        try:
+            dining_total = monthly_summary[monthly_summary['Category'] == 'Dining Out']['Amount'].iloc[0]
+        except:
+            dining_total = 0.00
+
+        savings = 10000.00
+        
+        return (
+            f"**Dining Out Optimization:** Your **₹{dining_total:,.2f}** on Dining Out is a high priority area. "
+            f"By cutting 2-3 restaurant trips, you could save about **₹{savings:,.2f}** over the next month, accelerating your home goal significantly!"
+        )
+    else:
+        # Default response
+        return (
+            "Simulated Insight: I'm the **Personalized Education Engine**. I can analyze your spending to find ways to boost your savings. "
+            "Try asking me specifically about **'groceries'** or **'dining out'** for a tailor-made plan!"
+        )
+
+# 4. Product Recommendation Logic (Promote)
+def get_product_recommendation():
+    """Generates product recommendation based on user goal and risk."""
+    if st.session_state.is_partner_added:
+        return "🤝 **HSBC Joint Fixed-Rate Deposit (JFRD):** Offers a high interest rate, perfect for accelerating your shared goal. Since you are saving collaboratively, this joint account maximizes returns."
+    
+    current_goal_balance = st.session_state.balances['Joint Checking']
+    if current_goal_balance > 4500000: # Over 45 Lakhs (Close to target)
+        return "📈 **HSBC Low-Risk Capital Bond:** Since you are very close to your target, consider putting the last few lakhs into a short-term, low-risk bond to earn maximum safe interest before withdrawal."
+    else:
+        return "🔒 **HSBC Flexi-Term RD (Recurring Deposit):** Start a separate, automated monthly RD to systematically fund your Discretionary Savings. This protects your main goal."
+
+# 5. Goal Reporting Logic (Report)
+def generate_progress_report(current_balance, target):
+    """Generates a detailed progress report summary."""
+    time_remaining_months = (GOAL_DEADLINE_YEAR - 2025) * 12 # Simple simulation: 12 months left
+    
+    if target == 0: return "Set a goal target first!"
+    
+    required_monthly = (target - current_balance) / time_remaining_months if time_remaining_months > 0 and current_balance < target else 0
+    
+    if current_balance >= target:
+        status = "Goal Achieved!"
+    elif required_monthly > 100000: # Over 1 Lakh per month is high risk
+        status = "⚠️ **High-Risk:** Monthly contribution needed is high. You must increase savings or extend the timeline."
+    else:
+        status = "🟢 **On Track:** Maintain the current contribution pace."
+        
+    report = f"""
+    - **Goal Status:** {status}
+    - **Current Progress:** {(current_balance / target) * 100:.1f}%
+    - **Estimated Finish Date:** Q4 {GOAL_DEADLINE_YEAR}
+    - **Required Monthly Contribution:** ₹{required_monthly:,.2f}
+    """
+    return report
+
+# --- Initialize Session State ---
+
+if 'balances' not in st.session_state:
+    st.session_state.balances = INITIAL_BALANCES
+    st.session_state.status_message = ""
+    st.session_state.is_risky_transaction = False
+    st.session_state.is_partner_added = False
+    st.session_state.insight_history = []
+    st.session_state.goals_data = {'target': GOAL_TARGET, 'current': INITIAL_BALANCES['Joint Checking']}
+
+
+# --- Streamlit UI Components ---
+
+st.set_page_config(
+    page_title="HSBC Financial Co-Pilot Demo (INR)", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
+
+st.title("🛡️ HSBC Financial Co-Pilot: Transforming Financial Experience")
+st.markdown("---")
+
+# --- Sidebar for Status Display ---
+
+with st.sidebar:
+    st.header(f"💰 Financial Goals Status")
+    
+    # Goal Status
+    st.subheader(f"Goal: {GOAL_NAME}")
+    current_goal_balance = st.session_state.balances['Joint Checking']
+    st.session_state.goals_data['current'] = current_goal_balance
+    
+    progress = min(current_goal_balance / GOAL_TARGET, 1.0)
+    st.progress(progress)
+    
+    st.metric(
+        label="Progress", 
+        value=f"₹{current_goal_balance:,.2f}", 
+        delta=f"{(progress * 100):.1f}% complete"
+    )
+    st.markdown(f"**Target:** ₹{GOAL_TARGET:,.2f} | **Deadline:** {GOAL_DEADLINE_YEAR}")
+    
+    st.markdown("---")
+    st.subheader("Account Balances")
+    balance_data = {
+        "Account": list(st.session_state.balances.keys()),
+        "Balance": [f"₹{b:,.2f}" for b in st.session_state.balances.values()]
+    }
+    st.dataframe(pd.DataFrame(balance_data), hide_index=True)
+    
+    st.markdown("---")
+    if st.button("Reset Demo", key="sidebar_reset"):
+        st.session_state.clear()
+        st.experimental_rerun()
+
+
+# --- Main App Tabs (The 5 Layers) ---
+
+# Tabs are ordered: L1 -> L2 -> L3 -> L4 -> L5
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "1. Insights (Analyze)", 
+    "2. Collaborative (Commit)", 
+    "3. Nudge (Protect)", 
+    "4. Product (Promote)", 
+    "5. Report (Accountability)"
+])
+
+# --- Tab 1: Layer 1 (Transaction Insights) ---
+with tab1:
+    st.header("Layer 1: Personalized Education Engine (Analyze)")
+    st.markdown("Get tailor-made advice by asking the Co-Pilot to analyze your spending.")
+    
+    # Expense Visualization
+    st.subheader("Monthly Expense Breakdown (Last 30 Days)")
+    grouped_expenses = df_expenses.groupby('Category')['Amount'].sum().sort_values(ascending=False).reset_index()
+    st.dataframe(grouped_expenses.set_index('Category'), use_container_width=True)
+    st.bar_chart(grouped_expenses.set_index('Category'))
+    
+    # Chat Bot Interface
+    st.subheader("Chat with your Co-Pilot")
+    if not st.session_state.insight_history:
+        st.session_state.insight_history.append({"role": "assistant", "content": "Hello! I can analyze your spending to find ways to boost your savings. Try asking: **'How can I save money on groceries?'**"})
+
+    for message in st.session_state.insight_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if prompt := st.chat_input("Ask your Co-Pilot for a financial insight...", key="L1_prompt"):
+        st.session_state.insight_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        with st.chat_message("assistant"):
+            insight = generate_financial_insight(prompt, df_expenses)
+            st.markdown(insight)
+            st.session_state.insight_history.append({"role": "assistant", "content": insight})
+
+# --- Tab 2: Layer 2 (Collaborative Hub) ---
+with tab2:
+    st.header("Layer 2: Collaborative Planning Hub (Commit)")
+    
+    st.subheader("Add Partner for Shared Goals")
+    if not st.session_state.is_partner_added:
+        st.info("Your goals are currently private. Add a partner to track joint progress.")
+        with st.form("partner_form"):
+            st.text_input("Partner's Email (Simulation)", value="partner@example.com")
+            submitted = st.form_submit_button("Securely Invite Partner")
+            if submitted:
+                st.session_state.is_partner_added = True
+                st.success("✅ Partner 'Jane Doe' added! Your shared goal is now visible to both of you.")
+                st.rerun()
+    else:
+        st.success("🤝 **Collaborative Goal Active!** Your partner, Jane Doe, is tracking this progress.")
+        st.markdown(f"**Total Contributed by Partner (Simulated):** ₹{st.session_state.balances['Partner\'s Account']:,.2f}")
+    
+    st.markdown("---")
+    st.subheader("Shared Goal Details")
+    st.markdown(f"**Goal:** {GOAL_NAME} | **Target:** ₹{GOAL_TARGET:,.2f}")
+    st.markdown(f"**Current Joint Progress:** ₹{st.session_state.goals_data['current']:,.2f}")
+
+
+# --- Tab 3: Layer 3 (Proactive Nudge) ---
+with tab3:
+    st.header("Layer 3: Proactive Nudge Engine (Protect)")
+    st.markdown("Simulate a risky transaction to trigger a real-time intervention and protect your goal.")
+    
+    # Nudge Demo
+    st.subheader("Nudge Engine Demo (The Wow Factor)")
+    with st.form("transaction_form"):
+        source = st.selectbox("Source Account (Goal Balance is in Joint Checking)", list(st.session_state.balances.keys()), index=0, key="src_acc_nudge")
+        st.text_input("Target Merchant", value="Luxury Impulse Buy Merchant", disabled=True)
+        amount = st.number_input(f"Amount to Transfer (Try ₹{RISKY_AMOUNT_DEFAULT:,.2f})", min_value=1.00, value=RISKY_AMOUNT_DEFAULT, step=10000.00, format="%.2f", key="amt_nudge")
+        submitted = st.form_submit_button("Confirm Transfer (Trigger Nudge Check)")
+
+    # Handle Form Submission and Logic
+    if submitted:
+        is_risky, balance_after, delay = check_transaction_risk(source, amount)
+
+        if is_risky:
+            st.error("🛑 **Nudge Alert: Goal Violation Risk Detected**", icon="🚨")
+            st.markdown(f"**Action:** Transfer of **₹{amount:,.2f}** requested.\n**Impact:** This transaction will immediately delay your shared goal by **{delay}** and drop the balance to ₹{balance_after:,.2f}.")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Reallocate Funds (Recommended)", type="primary", key="reallocate_btn"):
+                    handle_reallocation(amount)
+                    st.rerun()
+            with col2:
+                if st.button("Proceed Anyway", key="proceed_btn"):
+                    execute_transfer(source, "Merchant", amount)
+                    st.rerun()
+        else:
+            execute_transfer(source, "Merchant", amount)
+            st.rerun()
+    
+    # Display Nudge Status
+    if st.session_state.status_message:
+        if "REALLOCATION" in st.session_state.status_message: st.success(st.session_state.status_message)
+        elif "Error" in st.session_state.status_message: st.error(st.session_state.status_message)
+        else: st.info(st.session_state.status_message)
+        st.session_state.status_message = ""
+
+# --- Tab 4: Layer 4 (Product Recommendation) ---
+with tab4:
+    st.header("Layer 4: Contextual Product Recommendation (Promote)")
+    st.markdown("The Co-Pilot analyzes your financial behavior and goal progress to suggest the most suitable HSBC product, promoting bank offerings strategically.")
+    
+    st.subheader("Personalized Recommendation for Your Goal")
+    st.info("The Co-Pilot's analysis suggests the following: ")
+    st.markdown(f"**Recommendation:** {get_product_recommendation()}")
+    st.markdown("This recommendation is based on your current savings velocity, goal status, and collaboration profile (Layer 2).")
+    
+    st.markdown("---")
+    st.subheader("Underlying Logic (Strategic Impact)")
+    st.markdown("""
+        - **If Partner Added:** Recommends joint, high-yield products.
+        - **If Goal > 90%:** Recommends short-term, low-risk investment bonds.
+        - **If High Discretionary Spending:** Recommends automated RDs to capture savings before they are spent.
+    """)
+
+# --- Tab 5: Layer 5 (Goal Progress Report) ---
+with tab5:
+    st.header("Layer 5: Goal Progress Report (Accountability)")
+    st.markdown("A clear, quantitative report to maintain accountability and track goal trajectory.")
+    
+    st.subheader("Detailed Goal Status")
+    report = generate_progress_report(st.session_state.goals_data['current'], st.session_state.goals_data['target'])
+    st.markdown(report)
+    
+    st.markdown("---")
+    st.subheader("Transaction History Impact")
+    st.markdown("Review all transactions that have impacted your **Joint Checking** account recently.")
+    # Show relevant transactions (simulated)
+    recent_transactions = df_expenses[df_expenses['Category'].isin(['Rent/Mortgage', 'Investment'])]
+    st.dataframe(recent_transactions.set_index('Date'), use_container_width=True)
