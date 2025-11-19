@@ -1,0 +1,35 @@
+Section Content
+🎯 Objectives 1. Empower Financial Wellness: Shift from reactive transaction processing to proactive, goal-oriented financial partnership for every customer.
+2. Drive Deeper Engagement: Increase customer lifetime value and loyalty by fostering collaborative financial planning.
+3. Enable Strategic Cross-Sell: Leverage behavioral insights to provide timely, relevant HSBC product recommendations.
+🛠️ Proposed methodology We propose the "HSBC Financial Co-Pilot," a 5-layer intelligence stack built as an API-first overlay to existing banking systems. It integrates real-time behavioral nudges, AI-driven personalized insights, collaborative goal tracking, and dynamic product recommendations, all within a unified digital experience.
+✖️ Limitations of current methodology 1. Passive & Reactive: Existing platforms primarily report on past transactions; they do not intervene proactively to prevent financial mishaps.
+2. Isolated Experience: Current apps lack features for shared financial goal setting and collaborative tracking between partners.
+3. Generic Product Promotion: Product recommendations are often untargeted, missing contextual relevance based on individual financial behavior and goals.
+✅ Benefits For the Customer: Automated financial discipline, accelerated goal achievement, reduced financial stress, and a truly personalized banking experience.
+For HSBC: Enhanced brand differentiation, increased customer loyalty and retention, higher conversion rates for financial products, and improved operational efficiency through automated coaching.
+
+
+Slide 2: Detailed Methodology / Approach / Solution Architecture
+Detailed Methodology / Approach / Solution Architecture
+The HSBC Financial Co-Pilot is designed as a modular, API-first architecture that integrates seamlessly with HSBC's existing core banking and data infrastructure.
+Key Architectural Components:
+Data Ingestion Layer (Simulated): Aggregates real-time transaction data, account balances, user-defined goal parameters (target amounts, deadlines), and demographic information. This layer simulates secure access to relevant customer data without impacting core systems.
+Co-Pilot Intelligence Layer (Core Innovation): This is the brain of the system, comprising the 5 distinct functional layers:
+Layer 1: Transaction Insights Engine: Utilizes rule-based logic and simulated AI (NLP for chat, data analytics for spending patterns) to identify savings opportunities and generate personalized financial advice.
+Layer 2: Collaborative Goal Engine: Manages multi-user goal tracking, permissioning, and aggregated progress visualization.
+Layer 3: Proactive Nudge Engine: A real-time rules engine that monitors outgoing transactions against established goals and risk thresholds, triggering contextual interventions.
+Layer 4: Product Recommendation Engine: A dynamic recommendation system that leverages customer financial health, goal progress, and identified needs to suggest relevant HSBC products (savings accounts, mutual funds, bonds, etc.).
+Layer 5: Goal Reporting Module: Generates on-demand and scheduled reports on goal progress, required contributions, and financial health status.
+User Experience Layer (Streamlit Prototype): A responsive, interactive front-end built with Streamlit, demonstrating the core functionalities of the 5 layers in a cohesive user interface, including real-time alerts, chatbot interactions, and dynamic dashboards.
+Security and Scalability:
+API-First Design: Ensures loose coupling and easy integration with existing and future HSBC platforms.
+Modular Components: Allows for independent development, deployment, and scaling of each layer.
+Simulated Data: For this prototype, all sensitive data is simulated and hardcoded, ensuring no direct access to real customer information or production systems, maintaining security posture.
+Demo/ Prototype
+Yes
+Note:
+We will not provide infrastructure for development.
+Need to use your personal system.
+For screening, can keep screenshots for the prototype.
+Level 1 and Level 2, Demo can be done through zoom meeting and your personal system or office laptop based on your development device.
