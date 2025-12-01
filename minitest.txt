@@ -152,3 +152,13 @@ Deterministic Inference: The model generates identical vector embeddings for the
 Optimized Sentence Retrieval: Unlike Word2Vec, which requires aggregating individual word vectors to approximate a sentence, MiniLM is architected for direct sentence-level encoding, offering a streamlined and efficient retrieval workflow for query-based searching.
 
 
+.........
+
+Suitability (Semantic Search focus)
+Handling User Intent: MiniLM is exceptionally suitable for "Intent-based" search. Unlike keyword search, which looks for exact string matches, MiniLM connects queries to results based on meaning. For example, a query for "internet connection fails" will successfully retrieve documents containing "network outage" or "wifi broken," even if they share no common words.
+Asymmetric Search: It is well-suited for asymmetric semantic search, where the input query is short (a question) and the target is a paragraph (the answer). This makes it ideal for FAQ search engines or internal knowledge base retrieval.
+Ranking & Re-ranking: It provides a granular "similarity score" (typically between 0 and 1). This allows you to mathematically sort results by relevance, placing the most pertinent answer at the top of the list.
+Synonym Resolution: It automatically handles synonyms without maintaining manual synonym lists. It "knows" that "cheap", "inexpensive", and "budget" are semantically close in the vector space.
+
+
+
