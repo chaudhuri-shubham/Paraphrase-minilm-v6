@@ -146,3 +146,9 @@ Out-of-Vocabulary Handling:
 MiniLM: Can handle typos and new words by breaking them into parts (sub-words).
 Word2Vec: Fails completely if a user types a word that wasn't in its training dictionary.
 
+
+Standardized Vector Dimensionality: The model enforces a fixed output size of 384 dimensions for all input text, ensuring consistent storage requirements and database schema compatibility.
+Deterministic Inference: The model generates identical vector embeddings for the same input text across multiple runs, guaranteeing reproducibility and data consistency (zero stochastic variation).
+Optimized Sentence Retrieval: Unlike Word2Vec, which requires aggregating individual word vectors to approximate a sentence, MiniLM is architected for direct sentence-level encoding, offering a streamlined and efficient retrieval workflow for query-based searching.
+
+
