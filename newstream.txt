@@ -135,3 +135,76 @@ if prompt := st.chat_input("Ask your Co-Pilot for a financial insight...", key="
         # Store the simplified text for history, not the complex HTML block
         st.session_state.insight_history.append({"role": "assistant", "content": f"💡 Co-Pilot Insight: {insight}"})
 # --- END OF LAYER 1 UI BLOCK ---
+
+
+.................
+
+# --- IMPORTANT: Place this code block where you define the main content area ---
+# This block assumes the following variables are defined earlier in your script:
+# GOAL_NAME, GOAL_TARGET, GOAL_DEADLINE_YEAR
+# st.session_state.content_shown, st.session_state.balances, st.session_state.goals_data
+
+st.title("🛡️ HSBC Financial Co-Pilot: Transforming Financial Experience")
+st.markdown("---")
+
+# ----------------- WELCOME BUTTON LOGIC -----------------
+if 'content_shown' not in st.session_state:
+    st.session_state.content_shown = False
+
+if not st.session_state.content_shown:
+    st.markdown("## Welcome to the Future of Banking.")
+    st.markdown("We are demonstrating the **HSBC Financial Co-Pilot**, designed to ensure financial success for every user.")
+    
+    # Use a large button and center it visually
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("Welcome, User! 👋 Start Demo", type="primary", use_container_width=True):
+            # When clicked, set the state to True and RERUN
+            st.session_state.content_shown = True
+            st.experimental_rerun()
+            
+else:
+    # ----------------- GOAL SYNOPSIS HEADER (Only appears after button click) -----------------
+    
+    # Fetch current data from session state
+    current_balance = st.session_state.balances.get('Joint Checking', 0)
+    target = st.session_state.goals_data.get('target', 1)
+    
+    # Calculate progress safely
+    progress_percent = min(current_balance / target, 1.0) * 100
+    
+    # Check if target is set to avoid errors in formatting
+    if target == 1: # Assuming 1 is a safe non-zero default
+         target_display = "Set Target"
+         progress_percent = 0.0
+    else:
+         target_display = f"₹{target:,.0f}"
+
+    st.markdown("## 🎯 Goal Synopsis")
+    st.markdown("---")
+    
+    col_g1, col_g2, col_g3, col_g4 = st.columns([2, 1, 1, 3])
+    
+    with col_g1:
+        st.metric(label="Goal Name", value=GOAL_NAME)
+    
+    with col_g2:
+        st.metric(label="Target Amount", value=target_display)
+    
+    with col_g3:
+        st.metric(label="Current Progress", value=f"₹{current_balance:,.0f}")
+    
+    with col_g4:
+        st.markdown("##### Goal Status")
+        st.progress(progress_percent / 100)
+        st.caption(f"{progress_percent:.1f}% Complete | Deadline: {GOAL_DEADLINE_YEAR}")
+    
+    st.markdown("---")
+    
+    # --- The code for the 5 tabs (tab1, tab2, tab3, etc.) should follow here ---
+    
+    # Example structure for where the tabs need to be defined:
+    # tab1, tab2, tab3, tab4, tab5 = st.tabs([...]) 
+    # with tab1:
+    #     ... your code ...
+
