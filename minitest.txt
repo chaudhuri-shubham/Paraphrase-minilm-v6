@@ -133,3 +133,16 @@ Assumption: Both models are configured to output vectors of the same size (e.g.,
 | Computation Cost | Higher (requires running a neural network forward pass). | Extremely Low (simple dictionary lookup). |
 Next Step
 Would you like a Python code snippet for the "Experimentation" phase (Point 1) that specifically demonstrates how to bridge the gap between MiniLM and a PostgreSQL database using pgvector?
+
+
+Even if both are set to the same vector size (e.g., 384 dimensions), MiniLM is superior for these reasons:
+Context vs. Keyword:
+MiniLM (Contextual): It understands the entire sentence structure. If a user searches "how to fix a network failure", MiniLM will match it with a document containing "internet connection troubleshooting" because the meaning is the same, even if the words are different.
+Word2Vec (Static): It treats words in isolation. It matches "network" to "network" and "failure" to "failure", but it struggles to understand the specific intent of a full sentence question.  
+Polysemy (Multiple Meanings):
+MiniLM: It knows that "Bank" in "River Bank" is different from "Bank" in "Bank Deposit".  
+Word2Vec: It assigns the exact same vector to "Bank" in both cases, leading to confusing search results (e.g., searching for financial documents but getting results about rivers).
+Out-of-Vocabulary Handling:
+MiniLM: Can handle typos and new words by breaking them into parts (sub-words).
+Word2Vec: Fails completely if a user types a word that wasn't in its training dictionary.
+
