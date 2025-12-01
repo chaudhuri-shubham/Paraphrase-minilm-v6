@@ -1,0 +1,137 @@
+# --- IMPORTANT: Necessary Imports and Configuration ---
+# Ensure these imports and variables exist at the top of your full code file.
+import streamlit as st
+import pandas as pd
+import time
+import random 
+
+GOAL_NAME = "First Home Down Payment Fund"
+# ... other constants (GOAL_TARGET, RISK_THRESHOLD_PERCENT, etc.)
+# --- End of Configuration ---
+
+
+# --- Data Structure (UPDATED for multi-month comparison) ---
+
+data_points = {
+    'Sep-25': {'Groceries': 15000, 'Dining Out': 8000, 'Shopping': 10000, 'Rent/Mortgage': 50000},
+    'Oct-25': {'Groceries': 23000, 'Dining Out': 11000, 'Shopping': 15000, 'Rent/Mortgage': 50000},
+    'Nov-25': {'Groceries': 35000, 'Dining Out': 10500, 'Shopping': 8000, 'Rent/Mortgage': 50000}
+}
+
+expense_records = []
+for month, categories in data_points.items():
+    for category, amount in categories.items():
+        expense_records.append({'Month': month, 'Category': category, 'Amount': amount})
+
+df_expenses = pd.DataFrame(expense_records)
+
+# --- Logic Function (UPDATED for multi-month analysis) ---
+
+def generate_financial_insight(user_query, expense_df):
+    """Generates insights based on multi-month data comparison."""
+    user_query = user_query.lower()
+    
+    # Calculate current month's spending (Nov-25) and previous two months' average (Sep-25, Oct-25)
+    current_month = 'Nov-25'
+    prev_months = ['Sep-25', 'Oct-25']
+    
+    df_current = expense_df[expense_df['Month'] == current_month]
+    df_prev = expense_df[expense_df['Month'].isin(prev_months)]
+
+    # Calculate current month's total per category
+    current_spend = df_current.groupby('Category')['Amount'].sum()
+
+    # Calculate average of previous two months
+    prev_avg_spend = df_prev.groupby('Category')['Amount'].sum() / len(prev_months)
+    
+    # Logic for Groceries
+    current_groceries = current_spend.get('Groceries', 0)
+    avg_groceries = prev_avg_spend.get('Groceries', 0)
+    groceries_diff = current_groceries - avg_groceries
+
+    # Logic for Shopping
+    current_shopping = current_spend.get('Shopping', 0)
+    avg_shopping = prev_avg_spend.get('Shopping', 0)
+    shopping_diff = current_shopping - avg_shopping
+
+    # --- Intelligent Insights based on Variance ---
+    
+    if "groceries" in user_query or "food" in user_query:
+        if groceries_diff > 5000: # Significant increase (e.g., spending increased by more than ₹5,000)
+             return (
+                f"ALERT: Groceries Spike! Your spend this month (₹{current_groceries:,.0f}) is **₹{groceries_diff:,.0f}** higher than your 2-month average (₹{avg_groceries:,.0f}). "
+                f"This spike alone could delay your home goal by 1 month. **Action:** Consider bulk-buying or switching to a loyalty program this week."
+            )
+        elif groceries_diff < -5000: # Significant decrease (good!)
+            return (
+                f"WELL DONE! Your groceries spend is **₹{abs(groceries_diff):,.0f}** below average. Keep this habit up, and transfer that saving to your goal fund immediately to accelerate your progress!"
+            )
+        else:
+             return (
+                f"Your groceries spend (₹{current_groceries:,.0f}) is on par with your average. If you could reduce this by just ₹5,000, you would save an extra ₹60,000 annually for your down payment."
+            )
+
+    elif "shopping" in user_query or "save money" in user_query:
+        if shopping_diff < 0:
+             return (
+                f"SMART DECISION! Your shopping spend is significantly lower this month (₹{current_shopping:,.0f} vs. average ₹{avg_shopping:,.0f}). Continue this discipline to stay ahead of your savings targets."
+            )
+        else:
+             return (
+                f"Your shopping spend (₹{current_shopping:,.0f}) appears high relative to previous months. This is a discretionary area. **Recommendation:** Set a hard weekly budget limit of ₹2,000 for shopping to ensure your major goal isn't impacted."
+            )
+    else:
+        return (
+            "I've analyzed your 3-month trend. Your **Rent/Mortgage** is stable. Your **Groceries** show a significant spike this month. Try asking: **'What about groceries?'**"
+        )
+
+
+# --- Streamlit UI Block for Layer 1 (Paste this inside your main application body) ---
+
+# --- Tab 1: Layer 1 (Transaction Insights) (UPDATED) ---
+# Assuming 'tab1' variable is defined and this block is inside 'with tab1:'
+
+# --- START OF LAYER 1 UI BLOCK ---
+st.header("Layer 1: Personalized Education Engine (Analyze)")
+st.markdown("Get tailor-made advice by asking the Co-Pilot to analyze your multi-month spending trends.")
+
+# Expense Visualization (UPDATED to show multi-month trends)
+st.subheader("3-Month Spending Trend: Groceries, Dining Out, Shopping")
+
+# Prepare data for multi-month visualization
+df_chart = df_expenses[~df_expenses['Category'].isin(['Rent/Mortgage', 'Utilities'])]
+df_chart = df_chart.pivot_table(index='Month', columns='Category', values='Amount', aggfunc='sum').fillna(0)
+
+st.bar_chart(df_chart.sort_index())
+
+# Chat Bot Interface (UPDATED for delay and colored output)
+st.subheader("Chat with your Co-Pilot")
+
+if 'insight_history' not in st.session_state:
+    st.session_state.insight_history = []
+    
+if not st.session_state.insight_history:
+    st.session_state.insight_history.append({"role": "assistant", "content": "Hello! I can analyze your 3-month trend. Try asking: **'What about groceries?'**"})
+
+for message in st.session_state.insight_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("Ask your Co-Pilot for a financial insight...", key="L1_prompt"):
+    st.session_state.insight_history.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        # ADDED DELAY HERE
+        with st.spinner('Analyzing 3 months of data and generating personalized insight...'):
+            time.sleep(1.5) # Simulates processing time
+            
+        insight = generate_financial_insight(prompt, df_expenses)
+        
+        # Using custom markdown for crisp, colored output
+        st.markdown(f'<div style="background-color: #E6F7FF; color: #004D99; border-radius: 5px; padding: 10px; font-weight: bold;">💡 Co-Pilot Insight: {insight}</div>', unsafe_allow_html=True)
+        
+        # Store the simplified text for history, not the complex HTML block
+        st.session_state.insight_history.append({"role": "assistant", "content": f"💡 Co-Pilot Insight: {insight}"})
+# --- END OF LAYER 1 UI BLOCK ---
