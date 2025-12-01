@@ -1,0 +1,191 @@
+# --- Data Structure (UPDATED with multi-category, multi-month data) ---
+expense_records = [
+    # --- SEPTEMBER 2025 (Lower Spending Baseline) ---
+    {'Month': 'Sep-25', 'Category': 'Groceries', 'Amount': 15000},
+    {'Month': 'Sep-25', 'Category': 'Dining Out', 'Amount': 8000},
+    {'Month': 'Sep-25', 'Category': 'Shopping', 'Amount': 10000},
+    {'Month': 'Sep-25', 'Category': 'Rent/Mortgage', 'Amount': 50000},
+    {'Month': 'Sep-25', 'Category': 'Transportation', 'Amount': 6000},
+    {'Month': 'Sep-25', 'Category': 'Travel & Vacations', 'Amount': 45000},
+    {'Month': 'Sep-25', 'Category': 'Healthcare', 'Amount': 2000},
+    {'Month': 'Sep-25', 'Category': 'Utilities', 'Amount': 7000},
+
+    # --- OCTOBER 2025 (Average/Increased Spending Month) ---
+    {'Month': 'Oct-25', 'Category': 'Groceries', 'Amount': 23000},
+    {'Month': 'Oct-25', 'Category': 'Dining Out', 'Amount': 11000},
+    {'Month': 'Oct-25', 'Category': 'Shopping', 'Amount': 15000},
+    {'Month': 'Oct-25', 'Category': 'Rent/Mortgage', 'Amount': 50000},
+    {'Month': 'Oct-25', 'Category': 'Education', 'Amount': 12000},
+    {'Month': 'Oct-25', 'Category': 'Transportation', 'Amount': 7800},
+    {'Month': 'Oct-25', 'Category': 'Healthcare', 'Amount': 1500},
+    {'Month': 'Oct-25', 'Category': 'Utilities', 'Amount': 8000},
+
+    # --- NOVEMBER 2025 (High/Spike Spending Month) ---
+    {'Month': 'Nov-25', 'Category': 'Groceries', 'Amount': 35000}, 
+    {'Month': 'Nov-25', 'Category': 'Dining Out', 'Amount': 10500},
+    {'Month': 'Nov-25', 'Category': 'Shopping', 'Amount': 8000},
+    {'Month': 'Nov-25', 'Category': 'Rent/Mortgage', 'Amount': 50000},
+    {'Month': 'Nov-25', 'Category': 'Housing', 'Amount': 5000}, 
+    {'Month': 'Nov-25', 'Category': 'Healthcare', 'Amount': 3200}, 
+    {'Month': 'Nov-25', 'Category': 'Entertainment', 'Amount': 4999}, 
+    {'Month': 'Nov-25', 'Category': 'Utilities', 'Amount': 6500},
+    {'Month': 'Nov-25', 'Category': 'Travel & Vacations', 'Amount': 5000}, 
+]
+df_expenses = pd.DataFrame(expense_records)
+
+
+.....
+
+def generate_financial_insight(user_query, expense_df):
+    """Generates insights based on multi-month data comparison."""
+    user_query = user_query.lower()
+    
+    current_month = 'Nov-25'
+    prev_months = ['Sep-25', 'Oct-25']
+    
+    df_current = expense_df[expense_df['Month'] == current_month]
+    df_prev = expense_df[df_expenses['Month'].isin(prev_months)]
+
+    current_spend = df_current.groupby('Category')['Amount'].sum()
+    prev_avg_spend = df_prev.groupby('Category')['Amount'].sum() / len(prev_months)
+    
+    # --- Groceries Logic ---
+    current_groceries = current_spend.get('Groceries', 0)
+    avg_groceries = prev_avg_spend.get('Groceries', 0)
+    groceries_diff = current_groceries - avg_groceries
+
+    # --- Healthcare Logic ---
+    current_healthcare = current_spend.get('Healthcare', 0)
+    avg_healthcare = prev_avg_spend.get('Healthcare', 0)
+    healthcare_increase_pct = (current_healthcare / avg_healthcare) * 100 if avg_healthcare > 0 else 0
+
+    # --- Intelligent Insights based on Variance ---
+    
+    if "groceries" in user_query or "food" in user_query:
+        if groceries_diff > 10000: # Significant increase (high spike in Nov)
+             return (
+                f"**ALERT: Grocery Trend Spike!** Your spend this month (₹{current_groceries:,.0f}) is **₹{groceries_diff:,.0f}** higher than your 2-month average (₹{avg_groceries:,.0f}). "
+                f"This sharp spike suggests stock-up buying or unnecessary premium purchases. **Action:** Audit November's shopping list. You can save ₹{groceries_diff:,.0f} by reverting to average spend."
+            )
+        elif groceries_diff < -5000: # Significant decrease (good!)
+            return (
+                f"**WELL DONE!** Your groceries spend is **₹{abs(groceries_diff):,.0f}** below average. Keep this habit up, and transfer that saving to your goal fund immediately to accelerate your progress!"
+            )
+        else:
+             return (
+                f"Your groceries spend (₹{current_groceries:,.0f}) is on par with your average. If you could reduce this by just ₹5,000, you would save an extra ₹60,000 annually for your down payment."
+            )
+
+    elif "healthcare" in user_query or "health" in user_query:
+        if healthcare_increase_pct > 150: # More than double the average
+             return (
+                f"**CRITICAL INSIGHT: Increasing Health Spend!** Your Healthcare expenses are up {healthcare_increase_pct:.0f}% from the 2-month average (₹{avg_healthcare:,.0f}). "
+                f"This non-discretionary increase should be tracked. **Action:** Review your insurance coverage and consider setting aside a small, fixed monthly amount into a dedicated 'Health Reserve' fund."
+            )
+        else:
+             return (
+                f"Your healthcare spending remains manageable. Ensure you are maximizing benefits from your current health insurance policy."
+            )
+
+    elif "transport" in user_query or "travel" in user_query:
+        # Check if Travel is high but Transportation is low (suggesting one big trip over commuting)
+        current_travel = current_spend.get('Travel & Vacations', 0)
+        current_transport = current_spend.get('Transportation', 0)
+        
+        if current_travel > 4000 and current_transport < 1000:
+            return (
+                f"**TRAVEL DISCIPLINE:** We see a ₹{current_travel:,.0f} Travel expense, but your regular Transportation costs are near zero. This indicates a high-value, specific trip. **Recommendation:** Since you have saved on daily commutes, ensure this travel expense was budgeted, and transfer any unexpected leftover savings from this category to your home goal."
+            )
+        else:
+            return (
+                f"Transportation and travel costs are consistent. Review public transport passes or carpooling options if you want to find marginal savings."
+            )
+            
+    elif "utility" in user_query or "utilities" in user_query:
+        current_utilities = current_spend.get('Utilities', 0)
+        avg_utilities = prev_avg_spend.get('Utilities', 0)
+
+        if current_utilities > avg_utilities * 1.15: # 15% increase
+            return (
+                f"**UTILITY SPIKE ALERT:** Your Utilities expense (₹{current_utilities:,.0f}) is 15% higher than your average. This could indicate seasonal change or a leak. **Action:** Review usage patterns immediately to identify and correct the cause, protecting your monthly savings flow."
+            )
+        else:
+             return (
+                f"Your utility costs are stable. Good job maintaining efficiency!"
+            )
+    
+    else:
+        return (
+            "I've analyzed your 3-month trend. Your **Groceries** and **Healthcare** show the biggest change this month. Try asking: **'What about groceries?'** or **'Tell me about healthcare spending.'**"
+        )
+
+
+........
+
+# --- Start of Layer 1 UI Block (Content inside 'with tab1:') ---
+st.header("Layer 1: Personalized Education Engine (Analyze)")
+st.markdown("Get tailor-made advice by asking the Co-Pilot to analyze your multi-month spending trends.")
+
+# --- DUAL COLUMN LAYOUT FOR CHART AND INSIGHT SUMMARY ---
+col_chart, col_summary = st.columns([2, 1])
+
+# 1. CHART COLUMN
+with col_chart:
+    st.subheader("3-Month Spending Trend: Groceries, Dining Out, Shopping")
+    
+    # Prepare data for multi-month visualization
+    df_chart = df_expenses[~df_expenses['Category'].isin(['Rent/Mortgage', 'Utilities', 'Housing', 'Healthcare', 'Transportation', 'Education', 'Travel & Vacations'])]
+    df_chart = df_chart.pivot_table(index='Month', columns='Category', values='Amount', aggfunc='sum').fillna(0)
+    st.bar_chart(df_chart.sort_index())
+    
+    # Chat Bot Interface
+    st.subheader("Chat with your Co-Pilot")
+    
+    # Note: Ensure st.session_state.insight_history is initialized globally
+    if not st.session_state.insight_history:
+        st.session_state.insight_history.append({"role": "assistant", "content": "Hello! I can analyze your 3-month trend. Try asking: **'What about groceries?'**"})
+
+    for message in st.session_state.insight_history:
+        with st.chat_message(message["role"]):
+            # Handle display of the assistant's styled content
+            if message["role"] == "assistant" and '<div style=' in message["content"]:
+                 st.markdown(message["content"], unsafe_allow_html=True)
+            else:
+                 st.markdown(message["content"])
+
+    if prompt := st.chat_input("Ask your Co-Pilot for a financial insight...", key="L1_prompt"):
+        st.session_state.insight_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        with st.chat_message("assistant"):
+            # ADDED DELAY
+            with st.spinner('Analyzing 3 months of data and generating personalized insight...'):
+                time.sleep(1.5) # Simulates processing time
+                
+            insight = generate_financial_insight(prompt, df_expenses)
+            
+            # Using custom markdown for crisp, colored output
+            styled_insight = f'<div style="background-color: #E6F7FF; color: #004D99; border-radius: 5px; padding: 10px; font-weight: bold;">💡 Co-Pilot Insight: {insight}</div>'
+            st.markdown(styled_insight, unsafe_allow_html=True)
+            
+            st.session_state.insight_history.append({"role": "assistant", "content": styled_insight})
+
+
+# 2. SUMMARY SIDEBAR COLUMN 
+with col_summary:
+    st.markdown("<h4 style='color: #004D99;'>Top Savings Potential 💰</h4>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    st.markdown("**1. Grocery Spike Alert**")
+    st.markdown("Your monthly grocery spend has **increased by 52%** compared to the 2-month average. Actionable saving potential: **₹12,000.**")
+    
+    st.markdown("**2. Healthcare Trend**")
+    st.markdown("Non-discretionary health expenses are up significantly. Consider setting up a **'Health Reserve' fund.**")
+    
+    st.markdown("**3. Goal Acceleration**")
+    st.markdown("Optimizing these areas could accelerate your home goal by **4 months.**")
+    st.markdown("---")
+    st.info("Ask the chat: 'What about groceries?'")
+
+# --- End of Layer 1 UI Block ---
