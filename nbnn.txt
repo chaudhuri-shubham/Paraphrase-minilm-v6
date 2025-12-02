@@ -1,433 +1,220 @@
-Perfect — here’s your final, crisp, high-impact version of your self-assessment, refined to sound confident, senior, and results-oriented.
-I’ve kept the Technical section strong, made FSA, Stakeholder, and People sections tighter but impactful, and ensured it all reads like a top-performing manager’s review.
-
-
----
-
-Self-Assessment – Analytics Manager
-
-
----
-
-Technical & Delivery Excellence
-
-Led multiple end-to-end analytical project deployments, consistently delivering high-quality outcomes under tight timelines.
-
-Solved complex challenges such as major data source changes, deprecated fields, and performance bottlenecks by redesigning logic, optimising code, and automating workflows — ensuring smooth deployment and scalability.
-
-Delivered a large-scale model deployment aligned with Model Risk Management standards, maintaining rigorous validation, documentation, and governance.
-
-Post-deployment, implemented targeted fixes to stabilise performance and enhance reliability.
-
-Created a governance system POC enabling in-platform document creation and review, strengthening traceability and compliance.
-
-Delivered multiple ad-hoc POCs under short deadlines to demonstrate business value and analytical innovation.
-
-Received formal appreciation from IT for proactive code changes, comprehensive testing, and effective collaboration across teams.
-
-
-
----
-
-Agile Delivery, FSA & Risk Alignment
-
-Embedded Future State Architecture (FSA) principles across developments, ensuring solutions remain scalable, secure, and compliant.
-
-Drove Agile delivery discipline by managing JIRA workflows, tracking tasks, ensuring timely updates, and escalating blockers early to maintain delivery momentum.
-
-Practised proactive risk and control management, embedding governance checks and audit readiness into every phase of the analytics lifecycle.
-
-
-
----
-
-Collaboration, People Engagement & Communication
-
-Conducted knowledge-sharing and KT sessions to strengthen team understanding of technical design, testing, and deployment processes.
-
-Supported cross-functional teams through issue resolution and testing integration, ensuring cohesive delivery across analytics, IT, and business stakeholders.
-
-Significantly improved visibility and communication, proactively updating leadership and partners — directly addressing prior feedback and building trust and transparency.
-
-Fostered an open, collaborative environment, encouraging joint problem-solving and cross-team learning.
-
-
-
----
-
-Stakeholder & Organisational Impact
-
-Maintained strong stakeholder alignment — translating complex requirements into actionable, high-impact solutions delivered within timelines.
-
-Balanced competing priorities strategically while driving projects that support organisational goals, regulatory compliance, and customer outcomes.
-
-Contributed to enterprise efficiency by optimising existing processes and reinforcing governance frameworks for safe, scalable analytics delivery.
-
-
-
----
-
-Career & Continuous Learning
-
-Proactively enhanced expertise in agile analytics delivery, data risk management, and governance frameworks, applying learnings directly to projects.
-
-Encouraged team learning and capability building through shared resources and mentoring discussions.
-
-
-
----
-
-✅ Overall Impact:
-This year, I have delivered technically demanding projects with excellence, embedded agile and risk-aligned practices, strengthened governance, and elevated collaboration and communication — driving measurable business and compliance outcomes across initiatives.
-
-
----
-
-Would you like me to now make a HR portal–ready version (6–8 power bullets, no headings, just impact lines) for quick submission in systems like Workday or SuccessFactors?
-
-
-Perfect ✅ — below is your final, high-impact self-assessment structured into three strong sections, with a clear flow from delivery and technical excellence → collaboration and stakeholder impact → governance, compliance, and agility.
-
-The tone is professional, confident, and leadership-oriented — ideal for performance submissions or sharing with senior management.
-
-
----
-
-Self-Assessment – Analytics Manager
-
-
----
-
-1. Technical & Delivery Excellence
-
-Led multiple end-to-end analytical projects, overcoming significant challenges such as data source migration, unavailable legacy fields, and prolonged processing time by redesigning logic, optimising workflows, and automating data processes for efficiency and accuracy.
-
-Delivered a major model deployment under the Model Risk Management framework, ensuring thorough validation, documentation, and governance alignment.
-
-Implemented large-scale post-deployment fixes, identifying root causes and enhancing model stability and overall system performance.
-
-Designed and delivered an innovative governance system POC that enables document creation and review within a controlled system — improving compliance, traceability, and scalability.
-
-Completed several ad-hoc and proof-of-concept projects on short timelines, demonstrating agility and strong problem-solving under pressure.
-
-Received formal appreciation from IT for proactive code changes, robust testing, and seamless collaboration during critical system integration and release phases.
-
-
-
----
-
-2. Collaboration, People & Stakeholder Impact
-
-Facilitated knowledge transfer (KT) and continuous support to colleagues, ensuring deep understanding of project frameworks, testing processes, and deployment procedures.
-
-Proactively supported multiple teams during testing and integration, ensuring smooth coordination and timely delivery of dependent projects.
-
-Acted on last year’s feedback to improve communication and visibility — maintained consistent stakeholder engagement, provided timely updates, and showcased team achievements to leadership.
-
-Partnered closely with stakeholders to align technical outcomes with business priorities, manage expectations, and deliver within timelines.
-
-Strengthened cross-functional collaboration between analytics, IT, and business teams, ensuring aligned objectives and faster delivery cycles.
-
-Maintained high accountability and ownership, ensuring that stakeholder needs and organisational goals were consistently met with quality and speed.
-
-
-
----
-
-3. Governance, Risk & Agile Delivery
-
-Embedded Future State Architecture (FSA) principles across project design and execution, ensuring scalability, compliance, and long-term sustainability of analytics solutions.
-
-Adopted Agile ways of working, using structured JIRA-based delivery, timely progress updates, and clear task reprioritisation to maintain delivery discipline.
-
-Ensured timely escalation of risks or blockers to leadership, maintaining transparency and minimising project impact.
-
-Embedded strong data risk and control mechanisms in every stage of development, ensuring audit readiness and adherence to internal governance frameworks.
-
-Promoted a culture of continuous learning by enhancing my own skills in governance, agile delivery, and data management, and by sharing best practices across the team.
-
-Contributed to organisational efficiency by simplifying processes, improving delivery quality, and supporting risk-aware, scalable analytics growth.
-
-
-
----
-
-✅ Overall Impact:
-This year, I demonstrated strong ownership and technical excellence, delivering complex analytical projects on time while strengthening governance, communication, and collaboration. I successfully aligned delivery with strategic business goals and regulatory expectations, showcasing agility, innovation, and consistent value creation for the organisation.
-
-
----
-
-Would you like me to make this slightly shorter (for HR system entry) — same 3-section structure but condensed to about 10–12 high-impact bullets total for a performance form?
-
-
-
-
-....d dnd ddnd. ...djdnd d .ddndndnd....
-
-
-# Example text
-text = "Café naïve résumé – this has special characters!"
-
-# Different encodings to simulate
-encodings = ['utf-8', 'utf-16', 'utf-32', 'latin1', 'cp1252', 'iso-8859-1', 'big5', 'koi8-r']
-
-# Folder to save test files
 import os
-os.makedirs("encoded_txt_samples", exist_ok=True)
-
-for enc in encodings:
-    filename = f"encoded_txt_samples/sample_{enc}.txt"
-    try:
-        with open(filename, "w", encoding=enc, errors="ignore") as f:
-            f.write(text)
-        print(f"✅ Saved: {filename}")
-    except Exception as e:
-        print(f"❌ Failed for {enc}: {e}")
-
-
-
-.......
-
-
-import chardet
-
-for file in os.listdir("encoded_txt_samples"):
-    path = os.path.join("encoded_txt_samples", file)
-    with open(path, "rb") as f:
-        raw = f.read()
-    result = chardet.detect(raw)
-    print(f"{file}: detected as {result}")
-
-..........
-
-import random
-
-encodings = ['utf-8', 'utf-16', 'cp1252', 'latin1', 'utf-32']
-texts = [
-    "Résumé of José",
-    "Текст на русском",
-    "日本語のテキスト",
-    "中文内容",
-    "Français et caractères spéciaux – œ, é, à"
-]
-
-os.makedirs("mixed_encodings", exist_ok=True)
-
-for i, t in enumerate(texts):
-    enc = random.choice(encodings)
-    path = f"mixed_encodings/file_{i+1}_{enc}.txt"
-    with open(path, "w", encoding=enc, errors="ignore") as f:
-        f.write(t)
-    print(f"Saved {path} with encoding {enc}")
-
-
-rheheh........????????
-
-
-# ===============================
-# 📘 TXT EXTRACTION COMPARISON SCRIPT
-# ===============================
-
-import os
-import time
-import pandas as pd
+import fitz                            # PyMuPDF
+import math
+import pickle
 import numpy as np
-import chardet
-import unicodedata
-from ftfy import fix_text
-from fuzzywuzzy import fuzz
 from tqdm import tqdm
-import warnings
-warnings.filterwarnings("ignore")
+from sentence_transformers import SentenceTransformer
+from typing import List, Dict, Tuple
 
-# ====================================================
-# CONFIGURATION
-# ====================================================
+# Try to import faiss; if not present we will fallback
+try:
+    import faiss
+    _FAISS_AVAILABLE = True
+except Exception:
+    _FAISS_AVAILABLE = False
+    faiss = None
 
-input_folder = "path_to_txt_folder"           # Folder containing all .txt files
-reference_excel = "reference_texts.xlsx"      # Excel with columns: txt_name, reference_text
-output_excel = "txt_extraction_comparison.xlsx"
+# ---------------------------
+# CONFIG
+# ---------------------------
+PDF_FOLDER = "pdfs"               # folder containing PDF files
+EMBEDDINGS_PATH = "pdf_embeddings.pkl"   # to save embeddings + metadata
+FAISS_INDEX_PATH = "faiss.index" # optional path for faiss index
+MODEL_NAME = "all-MiniLM-L6-v2"  # MiniLM model
+CHUNK_SIZE = 800                 # characters per chunk (tune)
+CHUNK_OVERLAP = 200              # overlap characters between chunks
+EMBED_BATCH_SIZE = 64
+DEVICE = "cuda" if __import__("torch").cuda.is_available() else "cpu"
 
-# ====================================================
-# TEXT NORMALIZATION
-# ====================================================
+# ---------------------------
+#  UTIL: PDF TEXT EXTRACTION
+# ---------------------------
+def extract_text_from_pdf(path: str) -> str:
+    """Extracts and concatenates text from all pages of a PDF using PyMuPDF."""
+    text_pages = []
+    with fitz.open(path) as doc:
+        for page in doc:
+            txt = page.get_text("text")  # "text" extracts readable text
+            if txt:
+                text_pages.append(txt)
+    return "\n".join(text_pages)
 
-def normalize_text(text):
-    """Clean BOM, fix encoding issues, normalize unicode."""
-    if not isinstance(text, str):
-        return ""
-    text = text.replace("\ufeff", "")                      # remove BOM
-    text = fix_text(text)                                  # fix encoding errors
-    text = unicodedata.normalize("NFKC", text)             # normalize unicode
-    text = " ".join(text.split())                          # collapse spaces/newlines
-    return text.strip()
+# ---------------------------
+#  UTIL: TEXT CHUNKING
+# ---------------------------
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    """
+    Splits text into chunks of approximately chunk_size characters with given overlap.
+    Uses a simple sliding-window on characters; can be replaced with sentence-based splitting.
+    """
+    if not text:
+        return []
+    text = text.replace("\r\n", "\n")
+    chunks = []
+    start = 0
+    text_len = len(text)
+    while start < text_len:
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk.strip())
+        # move forward with overlap
+        start = end - overlap
+        if start < 0:
+            start = 0
+    return [c for c in chunks if c]
 
-# ====================================================
-# EXTRACTION FUNCTIONS
-# ====================================================
+# ---------------------------
+#  INDEX CREATION
+# ---------------------------
+def index_pdfs(pdf_folder: str = PDF_FOLDER,
+               model_name: str = MODEL_NAME,
+               embeddings_path: str = EMBEDDINGS_PATH,
+               use_faiss: bool = _FAISS_AVAILABLE):
+    """
+    Walks the pdf_folder, extracts chunks from PDFs, computes embeddings, and saves them.
+    Returns metadata dict with: embeddings (ndarray), metadatas (list of dicts)
+    """
+    model = SentenceTransformer(model_name, device=DEVICE)
+    metadata = []   # list of {file, chunk_id, text}
+    embeddings_list = []
 
-def extract_builtin(filepath):
-    """Builtin open() with multiple encoding fallbacks."""
-    encodings = [
-        'utf-8', 'utf-16', 'utf-32', 'latin1', 'cp1252',
-        'iso-8859-1', 'big5', 'shift_jis', 'koi8-r', 'mac_roman'
-    ]
-    for enc in encodings:
+    # Gather all pdf files
+    pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder)
+                 if f.lower().endswith(".pdf")]
+
+    print(f"Found {len(pdf_files)} PDF files.")
+
+    for pdf_path in tqdm(pdf_files, desc="PDFs"):
         try:
-            with open(filepath, 'r', encoding=enc, errors='ignore') as f:
-                text = f.read()
-                return normalize_text(text)
-        except Exception:
-            continue
-    return ""
-
-def extract_chardet(filepath):
-    """Detect encoding using chardet and decode accordingly."""
-    with open(filepath, 'rb') as f:
-        raw = f.read()
-    result = chardet.detect(raw)
-    enc = result['encoding'] or 'utf-8'
-    try:
-        text = raw.decode(enc, errors='ignore')
-    except Exception:
-        for fb in ['utf-8', 'latin1', 'utf-16', 'utf-32']:
-            try:
-                text = raw.decode(fb, errors='ignore')
-                break
-            except:
-                text = ""
-    return normalize_text(text)
-
-def extract_ftfy(filepath):
-    """Builtin open() + ftfy to fix garbled text."""
-    text = extract_builtin(filepath)
-    return normalize_text(text)
-
-def extract_textract(filepath):
-    """Extract text using textract."""
-    import textract
-    try:
-        text = textract.process(filepath).decode('utf-8', errors='ignore')
-        return normalize_text(text)
-    except Exception:
-        return ""
-
-# ====================================================
-# METRIC CALCULATION
-# ====================================================
-
-def compute_metrics(extracted, reference, time_taken):
-    """Compute evaluation metrics for extracted vs reference text."""
-    extracted = normalize_text(extracted)
-    reference = normalize_text(reference)
-
-    if len(reference) == 0:
-        return {k: 0 for k in [
-            "seq_accuracy", "fuzzy_accuracy", "noise_ratio",
-            "completeness", "duplicate_ratio", "length",
-            "word_count", "time_taken"
-        ]}
-
-    seq_accuracy = fuzz.token_sort_ratio(reference, extracted) / 100
-    fuzzy_accuracy = fuzz.partial_ratio(reference, extracted) / 100
-
-    # Noise ratio: extra chars not present in reference
-    extra_chars = max(0, len(extracted) - len(reference))
-    noise_ratio = extra_chars / max(len(extracted), 1)
-
-    # Completeness: portion of reference covered
-    completeness = min(len(extracted) / len(reference), 1.0)
-
-    # Duplicate ratio
-    words = extracted.split()
-    duplicate_ratio = 1 - (len(set(words)) / max(len(words), 1))
-
-    # Length & word count
-    text_length = len(extracted)
-    word_count = len(words)
-
-    return {
-        "seq_accuracy": seq_accuracy,
-        "fuzzy_accuracy": fuzzy_accuracy,
-        "noise_ratio": noise_ratio,
-        "completeness": completeness,
-        "duplicate_ratio": duplicate_ratio,
-        "length": text_length,
-        "word_count": word_count,
-        "time_taken": time_taken
-    }
-
-# ====================================================
-# MAIN COMPARISON
-# ====================================================
-
-extractors = {
-    "builtin_open": extract_builtin,
-    "chardet_open": extract_chardet,
-    "ftfy_builtin": extract_ftfy,
-    "textract": extract_textract
-}
-
-reference_df = pd.read_excel(reference_excel)
-summary_data = []
-error_data = []
-
-for extractor_name, extractor_func in extractors.items():
-    print(f"\n🔹 Processing with {extractor_name} ...")
-    results = []
-
-    for _, row in tqdm(reference_df.iterrows(), total=len(reference_df)):
-        txt_name = row['txt_name']
-        ref_text = str(row['reference_text'])
-        file_path = os.path.join(input_folder, txt_name)
-
-        if not os.path.exists(file_path):
-            error_data.append({
-                "extractor": extractor_name,
-                "file": txt_name,
-                "error": "File not found"
-            })
-            continue
-
-        start = time.time()
-        try:
-            extracted = extractor_func(file_path)
-            end = time.time()
-            time_taken = end - start
-
-            metrics = compute_metrics(extracted, ref_text, time_taken)
-            results.append({
-                "txt_name": txt_name,
-                "extracted_text": extracted,
-                **metrics
-            })
+            raw_text = extract_text_from_pdf(pdf_path)
         except Exception as e:
-            error_data.append({
-                "extractor": extractor_name,
-                "file": txt_name,
-                "error": str(e)
+            print(f"Failed to extract {pdf_path}: {e}")
+            continue
+
+        chunks = chunk_text(raw_text, CHUNK_SIZE, CHUNK_OVERLAP)
+        if not chunks:
+            continue
+
+        # compute embeddings in batches for this pdf
+        for i in range(0, len(chunks), EMBED_BATCH_SIZE):
+            batch = chunks[i:i+EMBED_BATCH_SIZE]
+            embs = model.encode(batch, show_progress_bar=False, convert_to_numpy=True, batch_size=EMBED_BATCH_SIZE)
+            # append embeddings and metadata in matching order
+            for j, emb in enumerate(embs):
+                chunk_id = i + j
+                metadata.append({
+                    "file": os.path.basename(pdf_path),
+                    "chunk_id": chunk_id,
+                    "text": batch[j]
+                })
+                embeddings_list.append(emb.astype(np.float32))
+
+    if len(embeddings_list) == 0:
+        raise RuntimeError("No text chunks were extracted; check PDF content.")
+
+    embeddings = np.vstack(embeddings_list)  # shape (N, d)
+    print(f"Produced {embeddings.shape[0]} embeddings of dimension {embeddings.shape[1]}")
+
+    # Save embeddings + metadata to disk (pickle)
+    with open(embeddings_path, "wb") as f:
+        pickle.dump({
+            "embeddings": embeddings,
+            "metadata": metadata,
+            "model_name": model_name,
+            "chunk_size": CHUNK_SIZE,
+            "chunk_overlap": CHUNK_OVERLAP
+        }, f)
+    print(f"Embeddings & metadata saved to {embeddings_path}")
+
+    # Optionally build faiss index
+    if use_faiss:
+        d = embeddings.shape[1]
+        index = faiss.IndexFlatIP(d)  # inner product index for cosine when vectors normalized
+        # normalize embeddings to unit length for cosine similarity with inner product
+        faiss.normalize_L2(embeddings)
+        index.add(embeddings)
+        faiss.write_index(index, FAISS_INDEX_PATH)
+        print(f"FAISS index built and saved to {FAISS_INDEX_PATH}")
+
+    return {"embeddings": embeddings, "metadata": metadata}
+
+# ---------------------------
+#  LOADING INDEX
+# ---------------------------
+def load_index(embeddings_path: str = EMBEDDINGS_PATH):
+    with open(embeddings_path, "rb") as f:
+        data = pickle.load(f)
+    embeddings = data["embeddings"]
+    metadata = data["metadata"]
+    return embeddings, metadata
+
+# ---------------------------
+#  SEARCH FUNCTION
+# ---------------------------
+def semantic_search(query: str,
+                    top_k: int = 5,
+                    embeddings_path: str = EMBEDDINGS_PATH,
+                    use_faiss: bool = _FAISS_AVAILABLE) -> List[Dict]:
+    """
+    Returns top_k results for query as a list of dicts {score, file, chunk_id, text}
+    """
+    # load model & index
+    model = SentenceTransformer(MODEL_NAME, device=DEVICE)
+    q_emb = model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
+
+    embeddings, metadata = load_index(embeddings_path)
+
+    results = []
+    if use_faiss:
+        # load faiss index
+        index = faiss.read_index(FAISS_INDEX_PATH)
+        # faiss expects normalized vectors if using inner product as cosine
+        faiss.normalize_L2(q_emb.reshape(1, -1))
+        D, I = index.search(q_emb.reshape(1, -1), top_k)
+        # D are inner products (cosine) after normalization
+        for score, idx in zip(D[0], I[0]):
+            if idx < 0:
+                continue
+            meta = metadata[idx]
+            results.append({
+                "score": float(score),
+                "file": meta["file"],
+                "chunk_id": meta["chunk_id"],
+                "text": meta["text"]
+            })
+    else:
+        # Brute-force cosine similarity fallback
+        # normalize embeddings and q_emb
+        def l2_norm(a):
+            return a / np.linalg.norm(a, axis=1, keepdims=True)
+        E = embeddings.copy()
+        # handle degenerate zeros
+        E_norm = E / np.clip(np.linalg.norm(E, axis=1, keepdims=True), a_min=1e-10, a_max=None)
+        q_norm = q_emb / max(1e-10, np.linalg.norm(q_emb))
+        scores = (E_norm @ q_norm).astype(np.float32)
+        top_idx = np.argsort(-scores)[:top_k]
+        for idx in top_idx:
+            results.append({
+                "score": float(scores[idx]),
+                "file": metadata[idx]["file"],
+                "chunk_id": metadata[idx]["chunk_id"],
+                "text": metadata[idx]["text"]
             })
 
-    df_results = pd.DataFrame(results)
-    summary_row = df_results.mean(numeric_only=True)
-    summary_row["extractor"] = extractor_name
-    summary_data.append(summary_row)
+    return results
 
-    # Save per-extractor results
-    mode = 'a' if os.path.exists(output_excel) else 'w'
-    with pd.ExcelWriter(output_excel, engine='openpyxl', mode=mode) as writer:
-        df_results.to_excel(writer, sheet_name=extractor_name[:30], index=False)
+# ---------------------------
+#  USAGE EXAMPLE
+# ---------------------------
+if __name__ == "__main__":
+    # 1) Create index (first run)
+    # index_pdfs()   # uncomment to build, or call programmatically
 
-# ====================================================
-# SUMMARY AND ERROR LOGS
-# ====================================================
-
-summary_df = pd.DataFrame(summary_data)
-error_df = pd.DataFrame(error_data)
-
-with pd.ExcelWriter(output_excel, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-    summary_df.to_excel(writer, sheet_name='Summary', index=False)
-    error_df.to_excel(writer, sheet_name='Errors', index=False)
-
-print("\n✅ TXT extraction comparison completed successfully!")
+    # 2) Search example (after building)
+    query = "financial results for Q1 2024"
+    print("Searching for:", query)
+    res = semantic_search(query, top_k=5)
+    for i, r in enumerate(res, 1):
+        print(f"\nResult #{i} — score: {r['score']:.4f} — file: {r['file']} — chunk: {r['chunk_id']}")
+        print(r['text'][:600])  # print first 600 chars of the passage
