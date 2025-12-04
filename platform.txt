@@ -396,3 +396,24 @@ def regex_sentence_tokenize(text):
 
     # Clean up
     return [s.strip() for s in sentences if s.strip()]
+
+
+
+import pandas as pd
+
+# your dict: data = { "tfidf": df1, "w2v": df2, "minilm": df3 }
+
+final_list = []
+
+for emb_type, df in data.items():
+    # find the score column automatically (the column that begins with 'score')
+    score_col = [c for c in df.columns if c.startswith("score")][0]
+    
+    temp = df.rename(columns={score_col: "score"}).copy()
+    temp["embedding_type"] = emb_type
+    
+    final_list.append(temp[["embedding_type", "filename", "score"]])
+
+final_df = pd.concat(final_list, ignore_index=True)
+
+print(final_df)
