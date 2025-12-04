@@ -1,0 +1,383 @@
+# Semantic Document Search Pipeline
+# Supports: pdf, docx, msg, pptx
+# Extractors: pymupdf (fitz), docx2txt, extract_msg, python-pptx
+# Chunking: fixed and recursive
+# Embeddings: Word2Vec (gensim average), CountVectorizer (TF-IDF), MiniLM (sentence-transformers)
+# Search: cosine similarity top-k (chunks and aggregated by document)
+
+import os, re, math
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from typing import List, Tuple, Dict
+
+# Extraction libs
+try:
+    import fitz  # pymupdf provides fitz
+except Exception:
+    import pymupdf as fitz
+
+import docx2txt
+import extract_msg
+from pptx import Presentation
+import ftfy
+import unicodedata
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+
+# Embedding libs
+from sentence_transformers import SentenceTransformer, util
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
+from gensim.models import Word2Vec
+from gensim.utils import simple_preprocess
+
+# ========== CONFIG ==========
+PDF_FOLDER = "docs"   # folder with all files to index
+CHUNK_METHODS = ["fixed", "recursive"]
+FIXED_CHUNK_WORDS = 200     # words per chunk for fixed
+FIXED_CHUNK_OVERLAP = 50    # overlap in words
+RECURSIVE_MAX_WORDS = 250   # max words allowed per recursive chunk
+
+W2V_PARAMS = {"vector_size": 100, "window": 5, "min_count": 1, "workers": 2, "epochs": 20}
+TFIDF_MAX_FEATURES = 10000
+MINILM_NAME = "all-MiniLM-L6-v2"
+
+TOP_K = 5
+
+# ========== UTIL: TEXT CLEANING ==========
+def clean_text(text: str, lower: bool = True) -> str:
+    if not isinstance(text, str):
+        return ""
+    text = ftfy.fix_text(text)
+    text = text.replace('\ufeff', '')
+    text = unicodedata.normalize("NFKC", text)
+    # unify newlines and collapse whitespace
+    text = re.sub(r'\r\n', '\n', text)
+    text = re.sub(r'\n+', '\n', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    if lower:
+        text = text.lower()
+    return text
+
+# ========== EXTRACTION FUNCTIONS ==========
+def extract_pdf(path: str) -> str:
+    """Extract all text from a PDF using pymupdf (fitz)."""
+    doc = fitz.open(path)
+    pages = []
+    for page in doc:
+        txt = page.get_text("text")
+        if txt:
+            pages.append(txt)
+    doc.close()
+    return "\n".join(pages)
+
+def extract_docx(path: str) -> str:
+    """Extract text from docx using docx2txt"""
+    try:
+        txt = docx2txt.process(path) or ""
+    except Exception:
+        txt = ""
+    return txt
+
+def extract_msg_file(path: str) -> str:
+    """Extract text body from .msg file (Outlook)"""
+    try:
+        msg = extract_msg.Message(path)
+        body = msg.body or ""
+    except Exception:
+        body = ""
+    return body
+
+def extract_pptx(path: str) -> str:
+    """Extract text from PPTX using python-pptx (all shapes)"""
+    try:
+        prs = Presentation(path)
+        texts = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text:
+                    texts.append(shape.text)
+    except Exception:
+        texts = []
+    return "\n".join(texts)
+
+# ========== LOAD DOCUMENTS INTO DF ==========
+def load_documents(folder: str) -> pd.DataFrame:
+    rows = []
+    for f in os.listdir(folder):
+        p = os.path.join(folder, f)
+        if os.path.isdir(p):
+            continue
+        ext = f.lower().split('.')[-1]
+        try:
+            if ext == "pdf":
+                raw = extract_pdf(p)
+            elif ext in ("docx",):
+                raw = extract_docx(p)
+            elif ext in ("msg",):
+                raw = extract_msg_file(p)
+            elif ext in ("pptx",):
+                raw = extract_pptx(p)
+            else:
+                continue
+        except Exception as e:
+            raw = ""
+        rows.append({"file_name": f, "file_path": p, "ext": ext, "raw_text": raw})
+    df = pd.DataFrame(rows)
+    df["clean_text"] = df["raw_text"].apply(clean_text)
+    return df
+
+# ========== CHUNKING ==========
+def fixed_chunking(text: str, chunk_words: int = FIXED_CHUNK_WORDS, overlap: int = FIXED_CHUNK_OVERLAP) -> List[str]:
+    words = text.split()
+    if not words:
+        return []
+    chunks = []
+    i = 0
+    n = len(words)
+    while i < n:
+        chunk = words[i:i+chunk_words]
+        chunks.append(" ".join(chunk))
+        i = i + chunk_words - overlap
+    return chunks
+
+def recursive_chunking(text: str, max_words: int = RECURSIVE_MAX_WORDS) -> List[str]:
+    """
+    Recursively split by sentence boundaries until chunks are below max_words.
+    Falls back to split in half if sentences are huge.
+    """
+    if not text.strip():
+        return []
+    sentences = sent_tokenize(text)
+    # quick join if small
+    if len(text.split()) <= max_words:
+        return [text]
+    # try grouping sentences until near max_words
+    chunks = []
+    cur = []
+    cur_len = 0
+    for s in sentences:
+        s_words = len(s.split())
+        if cur_len + s_words <= max_words:
+            cur.append(s)
+            cur_len += s_words
+        else:
+            if cur:
+                chunks.append(" ".join(cur))
+            # if single sentence longer than max_words, split by words (half)
+            if s_words > max_words:
+                words = s.split()
+                j = 0
+                while j < len(words):
+                    part = words[j:j+max_words]
+                    chunks.append(" ".join(part))
+                    j += max_words
+                cur = []
+                cur_len = 0
+            else:
+                cur = [s]
+                cur_len = s_words
+    if cur:
+        chunks.append(" ".join(cur))
+    # final safety: ensure chunks not too large (split if needed)
+    final = []
+    for c in chunks:
+        if len(c.split()) <= max_words:
+            final.append(c)
+        else:
+            words = c.split()
+            for i in range(0, len(words), max_words):
+                final.append(" ".join(words[i:i+max_words]))
+    return final
+
+# ========== BUILD CHUNK DATAFRAME ==========
+def build_chunks_df(docs_df: pd.DataFrame, methods: List[str] = CHUNK_METHODS) -> pd.DataFrame:
+    rows = []
+    for _, r in docs_df.iterrows():
+        fname = r['file_name']; text = r['clean_text']; ext = r['ext']
+        for method in methods:
+            if method == "fixed":
+                chunks = fixed_chunking(text)
+            elif method == "recursive":
+                chunks = recursive_chunking(text)
+            else:
+                chunks = []
+            for idx, c in enumerate(chunks):
+                rows.append({
+                    "file_name": fname,
+                    "file_path": r["file_path"],
+                    "ext": ext,
+                    "chunk_method": method,
+                    "chunk_id": idx,
+                    "chunk_text": c
+                })
+    chunks_df = pd.DataFrame(rows)
+    # deduplicate empty chunks and trim
+    chunks_df["chunk_text"] = chunks_df["chunk_text"].astype(str).str.strip()
+    chunks_df = chunks_df[chunks_df["chunk_text"] != ""].reset_index(drop=True)
+    return chunks_df
+
+# ========== EMBEDDINGS ==========
+# 1) CountVectorizer TF-IDF
+def fit_tfidf(chunks: List[str]) -> Tuple[TfidfVectorizer, np.ndarray]:
+    vec = TfidfVectorizer(max_features=TFIDF_MAX_FEATURES)
+    X = vec.fit_transform(chunks)  # sparse
+    X_norm = normalize(X, norm='l2', axis=1)  # normalize rows
+    return vec, X_norm  # X_norm is sparse matrix
+
+# 2) Word2Vec: train on tokenized chunks and average word vectors for chunk embedding
+def train_w2v(chunks: List[str]) -> Word2Vec:
+    tokenized = [simple_preprocess(c) for c in chunks]
+    model = Word2Vec(sentences=tokenized, **W2V_PARAMS)
+    return model
+
+def w2v_chunk_embedding(model: Word2Vec, chunk: str) -> np.ndarray:
+    toks = simple_preprocess(chunk)
+    vecs = [model.wv[w] for w in toks if w in model.wv]
+    if not vecs:
+        return np.zeros(model.vector_size, dtype=np.float32)
+    avg = np.mean(vecs, axis=0)
+    return avg.astype(np.float32)
+
+# 3) MiniLM sentence-transformer
+def compute_minilm_embeddings(chunks: List[str], model=None):
+    if model is None:
+        model = SentenceTransformer(MINILM_NAME)
+    embs = model.encode(chunks, show_progress_bar=True, convert_to_numpy=True, batch_size=32)
+    # normalize to unit vectors for cosine similarity
+    embs = embs / np.linalg.norm(embs, axis=1, keepdims=True)
+    return embs, model
+
+# ========== BUILD EMBEDDINGS AND STORE IN DF ==========
+def build_all_embeddings(chunks_df: pd.DataFrame, retrain_w2v: bool = True):
+    chunks = chunks_df["chunk_text"].tolist()
+    # TF-IDF
+    tfidf_vec, tfidf_X = fit_tfidf(chunks)
+    # Word2Vec train
+    if retrain_w2v:
+        w2v_model = train_w2v(chunks)
+    else:
+        raise ValueError("Please provide pre-trained w2v or set retrain_w2v=True")
+    # prepare w2v embeddings
+    w2v_embs = np.vstack([w2v_chunk_embedding(w2v_model, c) for c in chunks])
+    # MiniLM
+    minilm_embs, minilm_model = compute_minilm_embeddings(chunks)
+    # For TFIDF we have sparse matrix; convert to dense if needed (beware memory for huge corpora)
+    try:
+        tfidf_dense = tfidf_X.toarray()
+    except Exception:
+        tfidf_dense = tfidf_X.todense()
+    # Normalize TF-IDF rows (already normalized), but ensure float32
+    tfidf_dense = np.array(tfidf_dense, dtype=np.float32)
+    # Normalize W2V embeddings
+    w2v_norm = w2v_embs / np.clip(np.linalg.norm(w2v_embs, axis=1, keepdims=True), 1e-9, None)
+    # minilm already normalized
+    # attach to dataframe as lists
+    chunks_df = chunks_df.reset_index(drop=True)
+    chunks_df["embed_tfidf"] = [list(tfidf_dense[i]) for i in range(tfidf_dense.shape[0])]
+    chunks_df["embed_w2v"] = [list(w2v_norm[i]) for i in range(w2v_norm.shape[0])]
+    chunks_df["embed_minilm"] = [list(minilm_embs[i]) for i in range(minilm_embs.shape[0])]
+    # also store models for later query transforms
+    return chunks_df, {"tfidf_vec": tfidf_vec, "w2v_model": w2v_model, "minilm_model": minilm_model}
+
+# ========== SEMANTIC SEARCH ==========
+from numpy.linalg import norm
+
+def cosine_scores_matrix(query_vec: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    # both should be normalized (or not); compute cosine quickly
+    # query_vec shape (d,), matrix shape (N,d)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    # ensure float
+    q = query_vec.astype(np.float32)
+    M = matrix.astype(np.float32)
+    # compute dot product
+    scores = M @ q
+    return scores
+
+def embed_query(query: str, models: Dict):
+    q = clean_text(query)
+    # TF-IDF vector
+    tfidf_vec = models["tfidf_vec"].transform([q])
+    try:
+        tfidf_arr = tfidf_vec.toarray()[0].astype(np.float32)
+        if np.linalg.norm(tfidf_arr) > 0:
+            tfidf_arr = tfidf_arr / np.linalg.norm(tfidf_arr)
+    except Exception:
+        tfidf_arr = np.zeros(models["tfidf_vec"].vocabulary_.__len__(), dtype=np.float32)
+    # W2V avg vector
+    w2v_model = models["w2v_model"]
+    toks = simple_preprocess(q)
+    vecs = [w2v_model.wv[w] for w in toks if w in w2v_model.wv]
+    if vecs:
+        w2v_q = np.mean(vecs, axis=0).astype(np.float32)
+        if np.linalg.norm(w2v_q) > 0:
+            w2v_q = w2v_q / np.linalg.norm(w2v_q)
+    else:
+        w2v_q = np.zeros(w2v_model.vector_size, dtype=np.float32)
+    # MiniLM
+    minilm_model = models["minilm_model"]
+    minilm_q = minilm_model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
+    if np.linalg.norm(minilm_q) > 0:
+        minilm_q = minilm_q / np.linalg.norm(minilm_q)
+    return {"tfidf": tfidf_arr, "w2v": w2v_q, "minilm": minilm_q}
+
+def semantic_search_query(query: str, chunks_df: pd.DataFrame, models: Dict, top_k: int = TOP_K):
+    q_embs = embed_query(query, models)
+    # build matrices
+    tfidf_mat = np.vstack(chunks_df["embed_tfidf"].values).astype(np.float32)
+    w2v_mat = np.vstack(chunks_df["embed_w2v"].values).astype(np.float32)
+    minilm_mat = np.vstack(chunks_df["embed_minilm"].values).astype(np.float32)
+    # compute scores
+    scores_tfidf = cosine_scores_matrix(q_embs["tfidf"], tfidf_mat).flatten()
+    scores_w2v = cosine_scores_matrix(q_embs["w2v"], w2v_mat).flatten()
+    scores_minilm = cosine_scores_matrix(q_embs["minilm"], minilm_mat).flatten()
+    # attach to df copy
+    out = chunks_df.copy()
+    out["score_tfidf"] = scores_tfidf
+    out["score_w2v"] = scores_w2v
+    out["score_minilm"] = scores_minilm
+    # get top-k chunk results per model
+    top_chunks = {}
+    for key in ["tfidf", "w2v", "minilm"]:
+        col = "score_" + key
+        top = out.sort_values(col, ascending=False).head(top_k)
+        top_chunks[key] = top[["file_name","ext","chunk_method","chunk_id","chunk_text",col]].reset_index(drop=True)
+    # aggregate by document: best chunk per document
+    doc_scores = {}
+    for key in ["tfidf", "w2v", "minilm"]:
+        col = "score_" + key
+        agg = out.groupby("file_name")[col].max().reset_index().sort_values(col, ascending=False).head(top_k)
+        doc_scores[key] = agg
+    return {"top_chunks": top_chunks, "top_docs": doc_scores}
+
+# ========== USAGE EXAMPLE ==========
+if __name__ == "__main__":
+    # 1. Load documents
+    docs_df = load_documents(PDF_FOLDER)       # collects raw_text + clean_text
+    print("Loaded docs:", len(docs_df))
+
+    # 2. Build chunks (both methods)
+    chunks_df = build_chunks_df(docs_df, methods=["fixed","recursive"])
+    print("Total chunks:", len(chunks_df))
+
+    # 3. Build embeddings (this will train Word2Vec on the chunks)
+    chunks_df, models = build_all_embeddings(chunks_df, retrain_w2v=True)
+    print("Embeddings created. Example columns:", chunks_df.columns)
+
+    # 4. Save chunks_df to disk for later reuse (optional)
+    chunks_df.to_pickle("chunks_with_embeddings.pkl")
+    # Keep models dict saved; saving models heavy — you can pickle small structures or save gensim model separately
+    models["w2v_model"].save("w2v_model.bin")
+    # minilm model can be reloaded via SentenceTransformer(MINILM_NAME)
+
+    # 5. Run a query
+    query = "customer identity verification documents"
+    res = semantic_search_query(query, chunks_df, models, top_k=5)
+
+    print("\nTop chunks (MiniLM):")
+    print(res["top_chunks"]["minilm"][["file_name","chunk_id","score_minilm"]])
+
+    print("\nTop documents (MiniLM):")
+    print(res["top_docs"]["minilm"])
