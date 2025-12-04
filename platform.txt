@@ -381,3 +381,18 @@ if __name__ == "__main__":
 
     print("\nTop documents (MiniLM):")
     print(res["top_docs"]["minilm"])
+
+
+--------------_-------_--------
+
+import re
+
+def regex_sentence_tokenize(text):
+    if not isinstance(text, str) or not text.strip():
+        return []
+
+    # Basic split on sentence endings, keeping punctuation
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+
+    # Clean up
+    return [s.strip() for s in sentences if s.strip()]
