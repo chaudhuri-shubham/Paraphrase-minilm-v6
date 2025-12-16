@@ -1,0 +1,187 @@
+# .env file
+
+# API Key for GPT-4o
+OPENAI_API_KEY="your_gpt4o_api_token_here"
+GPT_MODEL_NAME="gpt-4o"
+
+# API Key for Mistral 7B 
+# NOTE: This assumes your Mistral endpoint is OpenAI-compatible.
+# You might need to change the base_url or use a different client library 
+# depending on your Mistral provider (e.g., Anyscale, TogetherAI, or native Mistral API).
+MISTRAL_API_KEY="your_mistral_7b_api_token_here"
+MISTRAL_MODEL_NAME="mistral-7b-model-name" 
+# Example base URL for a custom provider (uncomment and replace if needed):
+# MISTRAL_BASE_URL="https://api.example-mistral.com/v1" 
+
+
+import pandas as pd
+import os
+import json
+from openai import OpenAI, APIError
+from dotenv import load_dotenv
+
+# --- Configuration ---
+load_dotenv()
+
+# Define your classification context and categories
+CLASSIFICATION_CATEGORIES = [
+    "Product Inquiry",
+    "Technical Support",
+    "Billing Question",
+    "Feature Request",
+    "General Feedback"
+]
+
+# Define the detailed prompt context for the LLM
+SYSTEM_PROMPT = f"""
+You are an expert text classifier. Your task is to categorize user feedback into one of the following classes: {', '.join(CLASSIFICATION_CATEGORIES)}.
+
+RULES FOR CLASSIFICATION:
+1.  **Product Inquiry:** Text asking for details about a product, pricing, or availability.
+2.  **Technical Support:** Text reporting a bug, an error, or asking for help with a non-billing functionality.
+3.  **Billing Question:** Text asking about invoices, payments, subscriptions, or refunds.
+4.  **Feature Request:** Text suggesting a new feature or modification to an existing one.
+5.  **General Feedback:** All other miscellaneous comments, praise, or non-specific complaints.
+
+You must only respond with a single JSON object with the following structure.
+DO NOT include any text, notes, or explanations outside the JSON block.
+
+{{
+    "class_label": "The determined classification label from the list above",
+    "confidence_score": "A decimal score (0.0 to 1.0) indicating your confidence in the classification"
+}}
+"""
+
+# --- Pipeline Functions ---
+
+def classify_text_with_llm(client: OpenAI, text_to_classify: str, model_name: str) -> dict:
+    """
+    Calls the LLM API to classify a single piece of text and handles JSON parsing.
+    
+    Args:
+        client: An initialized OpenAI client instance (works for compatible APIs).
+        text_to_classify: The text from the DataFrame column to classify.
+        model_name: The name of the model to use (e.g., 'gpt-4o', 'mistral-7b-model-name').
+
+    Returns:
+        A dictionary containing the classification label and confidence.
+    """
+    user_prompt = f"CLASSIFY THIS TEXT: \"{text_to_classify}\""
+
+    try:
+        # 1. API Call with Structured Output Request
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            # Enforce JSON output for reliable parsing
+            response_format={"type": "json_object"}, 
+            temperature=0.0 # Use low temperature for classification tasks
+        )
+
+        # 2. Parse the JSON response
+        json_response = response.choices[0].message.content.strip()
+        classification_data = json.loads(json_response)
+        
+        return {
+            "classification": classification_data.get("class_label", "ERROR_NO_LABEL"),
+            "confidence": classification_data.get("confidence_score", 0.0)
+        }
+        
+    except APIError as e:
+        # Handle API rate limits, invalid keys, etc.
+        print(f"API Error for text: '{text_to_classify[:30]}...'. Error: {e}")
+        return {"classification": "API_FAILURE", "confidence": 0.0}
+    except json.JSONDecodeError as e:
+        # Handle cases where the LLM fails to return valid JSON
+        print(f"JSON Decode Error for text: '{text_to_classify[:30]}...'. Error: {e}")
+        return {"classification": "JSON_FAILURE", "confidence": 0.0}
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return {"classification": "UNKNOWN_ERROR", "confidence": 0.0}
+
+def get_llm_client(model_choice: str) -> tuple[OpenAI, str]:
+    """Initializes the correct OpenAI client based on model choice."""
+    if model_choice == "gpt-4o":
+        api_key = os.getenv("OPENAI_API_KEY")
+        model_name = os.getenv("GPT_MODEL_NAME")
+        client = OpenAI(api_key=api_key)
+    elif model_choice == "mistral-7b":
+        api_key = os.getenv("MISTRAL_API_KEY")
+        model_name = os.getenv("MISTRAL_MODEL_NAME")
+        base_url = os.getenv("MISTRAL_BASE_URL")
+        # Initialize client with optional base_url for non-OpenAI endpoints
+        client = OpenAI(api_key=api_key, base_url=base_url if base_url else "https://api.openai.com/v1")
+    else:
+        raise ValueError("Invalid model choice. Use 'gpt-4o' or 'mistral-7b'.")
+    
+    if not api_key:
+        raise RuntimeError(f"API Key for {model_choice} not found in environment variables.")
+
+    return client, model_name
+
+def run_classification_pipeline(df: pd.DataFrame, text_column: str, model_choice: str) -> pd.DataFrame:
+    """
+    Main pipeline function to process the DataFrame column by column.
+    """
+    print(f"Starting classification using model: **{model_choice}**")
+    
+    # 1. Initialize Client
+    client, model_name = get_llm_client(model_choice)
+
+    # 2. Apply Classification Function
+    # The .apply() method iterates through the DataFrame row by row, calling the LLM API.
+    results = df[text_column].apply(
+        lambda x: classify_text_with_llm(client, x, model_name)
+    )
+
+    # 3. Process and Merge Results
+    results_df = pd.DataFrame(results.tolist())
+    
+    # Check if classification column already exists and rename to avoid conflicts
+    if 'llm_classification' in df.columns:
+        df = df.drop(columns=['llm_classification', 'llm_confidence'], errors='ignore')
+        
+    df['llm_classification'] = results_df['classification']
+    df['llm_confidence'] = results_df['confidence']
+    
+    print("Classification complete!")
+    return df
+
+# --- Example Usage ---
+
+if __name__ == "__main__":
+    # -----------------------------------------------------------
+    # Create your DataFrame here (replace with pd.read_csv or similar)
+    # -----------------------------------------------------------
+    data = {
+        'id': [1, 2, 3, 4, 5, 6],
+        'text_to_classify': [
+            "My payment didn't process, I need a refund for this month's invoice.",
+            "I get an error 404 when I try to upload my document.",
+            "I love the new look! The interface is so clean now.",
+            "Can you add an option to save charts as SVG files? I need that feature.",
+            "How much does the enterprise plan cost per user?",
+            "The system is constantly crashing after the last update. Total failure."
+        ]
+    }
+    df = pd.DataFrame(data)
+    TEXT_COLUMN_NAME = 'text_to_classify'
+    
+    # --- Execute Pipeline ---
+    try:
+        # Change 'gpt-4o' to 'mistral-7b' to switch models
+        classified_df = run_classification_pipeline(df.copy(), TEXT_COLUMN_NAME, model_choice="gpt-4o")
+        
+        print("\n" + "="*50)
+        print("Final Classified DataFrame")
+        print("="*50)
+        print(classified_df[[TEXT_COLUMN_NAME, 'llm_classification', 'llm_confidence']])
+        
+    except (ValueError, RuntimeError) as e:
+        print(f"Error during setup: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during pipeline execution: {e}")
+
