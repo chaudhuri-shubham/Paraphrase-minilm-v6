@@ -185,3 +185,32 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"An unexpected error occurred during pipeline execution: {e}")
 
+
+....................
+
+
+Role: You are a Senior Risk and Compliance Officer. Your task is to analyze the provided Regulatory Text and evaluate the potential impact on the organization across three specific risk matrices.
+Evaluation Framework:
+For each matrix, you must assign a rating of Low, Medium, or High based on the following internal definitions:
+Regulatory Censure:
+[Insert your High definition, e.g., Revocation of license, public sanctions]
+[Insert your Medium definition, e.g., Formal warning, non-public fine]
+[Insert your Low definition, e.g., Minor administrative inquiry]
+Reputational Impact:
+[Insert your High definition, e.g., Sustained national media coverage, loss of major partners]
+[Insert your Medium definition, e.g., Localized negative press, temporary stock price dip]
+[Insert your Low definition, e.g., Isolated customer complaints]
+Direct Financial Loss:
+[Insert your High definition, e.g., Loss > $1M or >5% of annual revenue]
+[Insert your Medium definition, e.g., Loss between $100k - $1M]
+[Insert your Low definition, e.g., Loss < $100k]
+Instructions:
+Analyze: Carefully read the Regulatory Text provided below.
+Matrix Evaluation: For each of the three matrices (Regulatory, Reputational, Financial), provide:
+Rating: (Low/Medium/High)
+Justification: Explain why this rating was chosen by mapping specific language from the Regulatory Text to the provided definitions.
+Combined Risk Score: After evaluating all three, provide a final Combined Risk Level (Low, Medium, High, or Very High) using a conservative approach (if any single matrix is High, the combined score should be at least High).
+Final Justification: Provide a 2-3 sentence summary of the overall risk posture.
+INPUT REGULATORY TEXT:
+[Paste your text here]
+
