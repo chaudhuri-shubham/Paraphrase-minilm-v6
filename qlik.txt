@@ -1,0 +1,229 @@
+1. What is a synthetic key and when does it occur? How would you handle it?
+Answer:
+A synthetic key occurs when two or more tables share more than one common field.
+Example: Table A + Table B both contain fields CustomerID and Date.
+Qlik Sense creates a synthetic table to resolve compound keys — often causing performance issues.
+Fixes:
+Rename or alias fields
+Concatenate tables
+Create composite keys manually
+Remove unnecessary fields
+
+
+2. How does Set Analysis differ from normal filtering? Provide an example.
+Answer:
+Set Analysis applies predefined selections inside expressions, independent of user selections.
+Example:
+Copy code
+Qlik
+Sum({<Year={2024}>} Sales)
+This always calculates 2024 sales even if the user selects a different year.
+Normal filtering is based on UI selections and cannot override selections.
+
+
+3. How would you optimize a slow-performing dashboard? Give 3–4 methods.
+Answer:
+Reduce granularity → pre-aggregate data
+Optimize data model → avoid synthetic keys/circular references
+Use Auto-Calendar only if needed
+Limit heavy chart types (pivot, table with thousands of rows)
+Avoid nested If() logic; use ApplyMap()
+Minimize distinct aggregations
+Use incremental loading
+
+
+4. Explain ApplyMap() with an example.
+Answer:
+ApplyMap() works like a VLOOKUP.
+Example:
+Copy code
+
+
+
+Map_Salesperson:
+Mapping
+LOAD ID, Name
+FROM Sales.csv;
+
+LOAD
+SalesID,
+ApplyMap('Map_Salesperson', SalesID, 'Unknown') as SalesPersonName;
+It avoids joins → faster performance and cleaner model.
+
+5. Give an example of a storytelling feature you used in Qlik Sense.
+Answer:
+For sales performance reviews:
+Capture snapshots showing Sales YoY improving
+Annotate visuals with comments
+Arrange slides explaining why numbers change
+Export to PDF for leadership
+Outcome: business understood insights better than raw dashboards.
+
+
+6. How do you load Excel/CSV data into Qlik Sense?
+Answer:
+Using Data Load Editor or Add Data wizard:
+Click Add Data → Data files
+Upload Excel/CSV from local system or mapped folder
+Qlik auto suggests associations
+Go to Load Editor to customize logic
+Sample load:
+
+
+7. How do you create a Master Dimension and why is it important?
+Answer:
+Master Dimensions are reusable governed fields used across multiple charts.
+Steps:
+Open Master Items → Dimension → Create New
+Select a field or write an expression
+Example expression dimension:
+Copy code
+Qlik
+=Year(Date)
+Benefits: consistency, fewer errors, faster development
+
+
+8. What is a Master Measure? Give an example.
+Answer:
+A Master Measure stores reusable expressions like metrics.
+Example:
+Copy code
+Qlik
+Sum(Sales)
+Or with logic:
+Copy code
+Qlik
+Sum({<Year={$(=Year(Today()))}>} Sales)
+Using Master Measures improves governance and allows formatting + color settings.
+
+
+9. Explain the difference between a Dimension and Measure with example.
+Answer:
+Dimension → descriptive fields used to slice data
+Example: Region, Product, Month
+Measure → numeric calculations aggregated on dimensions
+Example:
+Copy code
+Qlik
+Sum(Sales)
+Avg(Discount)
+Count(CustomerID)
+A chart requires at least one dimension and one measure (except KPIs).
+
+
+10. Variables help avoid repeating logic and are key for dynamic filtering.
+
+
+11. Describe one complex visual you have built that required custom expressions.
+Look for:
+Waterfall chart
+Combo chart
+Decomposition
+Nested set analysis
+Advanced aggregations
+Weak applicant won’t have examples.
+
+
+12. Tell the challenges you have faced while building the dashboards and how did you tackle those
+
+
+13. Explain how you optimized dashboard performance. Give 3 methods.
+Strong Answer:
+“Three approaches worked well:
+1️⃣ Removed complex IF expressions and replaced them with pre-calculated flags in the script.
+2️⃣ Converted dimensions to numeric keys to reduce RAM usage.
+3️⃣ Used QVD pre-aggregations for large fact tables — especially in Pharma sales.
+Each reduced calculation time and improved responsiveness.”
+
+
+14. Explain how NPrinting was used in your projects.
+Strong Answer:
+“In both projects I automated email reports using NPrinting.
+Example:
+Report Type: Excel + PDF
+Scheduling: Monthly
+Filters: Region-wise
+Delivery: To distribution list
+I mapped Qlik Sense objects into templates, set condition logic, and tested automation.”
+
+
+15. How do you allow users to select a variable dimension (e.g., Product/Region/Customer) and change the chart view dynamically?
+
+
+16. What is the difference, and why do we create them?
+Answer:
+Master Dimension = reusable field list (like date hierarchy, geography, customer)
+Master Measure = reusable expressions (sum sales, avg margin)
+Benefits:
+✔ Reusability
+✔ Consistency
+✔ Faster chart building
+✔ Reduces calculation errors
+
+
+17. If one chart needs to respond to filters and another should remain static, how do you achieve it?
+Answer:
+Use Alternate States:
+Assign default state to dashboard
+Assign separate state (e.g., vStatic) to static chart
+Use set analysis:
+
+
+18. If data refreshes monthly and dashboard must compare to previous month automatically, how would you do it?
+Answer:
+Copy code
+
+
+
+Sum({<Month = {"$(=Max(Month))"}>} Sales)
+
+Sum({<Month = {"$(=Max(Month)-1)"}>} Sales)
+✔ No manual selection needed
+✔ Works even when next month arrives
+
+19. How do you embed multiple Qlik dashboards into one UI mashup?
+Answer:
+Using Qlik Capability API
+Exporting objects via iframe
+Using Qlik Dev Hub mashup editor
+Single page application using HTML + JS
+Apply global filters via API
+
+
+20. If a dataset has 500+ columns, how do you handle it for dashboard performance?
+Answer:
+Profile and remove unused fields
+Store data into multiple QVD layers
+Group fields into subject areas
+Limit distinct text
+Normalize into long tables
+Avoid synthetic keys
+
+
+21. How do you prevent synthetic keys when joining multiple tables?
+Answer:
+You should:
+✔ Rename fields
+✔ Drop duplicate key fields
+✔ Use QUALIFY/UNQUALIFY
+✔ Create composite key
+
+
+22. Which is easier: Transform data in Python then load into Qlik, or load Excel and transform in Qlik?
+
+
+23. You want to create a KPI that:
+By default shows data across all regions, ignoring region filters.
+But when a region filter is applied, it should automatically show only that region.
+Logic Needed:
+Use Set Analysis + Conditional logic to override selections only when user has not selected a region.
+
+
+24. You have a chart with two measures, but one measure ranges from 1 to 10,000 and the other from 1 to 10. The visual becomes distorted because the small measure becomes invisible.
+How to show both clearly?
+✅ Option A: Use Dual Axis
+Works best in line/bar charts.
+One axis handles the large measure, the other handles the small measure.
+How:
+Go to Chart → Appearance → Axes
+Enable Secondary Axis for the smaller measure.
