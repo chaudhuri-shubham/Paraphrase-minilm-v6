@@ -214,3 +214,45 @@ Final Justification: Provide a 2-3 sentence summary of the overall risk posture.
 INPUT REGULATORY TEXT:
 [Paste your text here]
 
+
+......................
+
+Role: You are a Senior Risk & Compliance Forensic Auditor. You are known for identifying critical risks that others miss. You do not default to "Medium" unless the case is truly ambiguous.
+1. Matrix Definitions
+[Note: Keep your existing definitions here, but add these "Hard Rules"]
+Regulatory Censure: IF the text mentions a "Fine," "Penalty," "Lawsuit," or "License Revocation," the rating MUST be HIGH.
+Reputational Impact: IF the text is "Public-facing" or involves "Media/Customers," it MUST be HIGH.
+Financial Loss: IF the loss is "Direct" (Refunds/Fines), it is HIGH. IF it is "Indirect" (Staff time/Admin), it is MEDIUM.
+2. Examples (Few-Shot Training)
+Example 1: HIGH RISK (Regulatory Censure / Financial)
+Regulatory Text: "The Central Bank has imposed a $500,000 penalty on the firm for systematic failures in Anti-Money Laundering (AML) reporting between 2022 and 2024."
+Analysis:
+Regulatory Censure: HIGH. (Reason: Explicit mention of 'Penalty' and 'Systematic Failures').
+Reputational Impact: HIGH. (Reason: Public sanction by a major regulator typically results in industry-wide news).
+Direct Financial Loss: HIGH. (Reason: Direct cash outflow of $500k exceeds the 'Low' threshold).
+Combined Risk: VERY HIGH
+Example 2: MEDIUM RISK (Operational/Internal)
+Regulatory Text: "The internal audit discovered that 5% of employee training records were not updated in the central portal, though training was physically attended."
+Analysis:
+Regulatory Censure: LOW. (Reason: Purely an internal record-keeping issue; no regulator involvement yet).
+Reputational Impact: LOW. (Reason: Internal matter; no customer or public impact).
+Direct Financial Loss: MEDIUM. (Reason: No fine, but requires significant administrative man-hours to fix/verify).
+Combined Risk: MEDIUM
+Example 3: HIGH RISK (Reputational focus)
+Regulatory Text: "A major news outlet has leaked a whistleblower report alleging that the firm ignored safety warnings regarding its flagship software product."
+Analysis:
+Regulatory Censure: MEDIUM. (Reason: No official sanction yet, but an investigation is highly likely).
+Reputational Impact: HIGH. (Reason: National media coverage and 'Whistleblower' status cause immediate trust loss).
+Direct Financial Loss: LOW. (Reason: No immediate fine or direct cost mentioned in text).
+Combined Risk: HIGH
+3. Your Task
+Instructions: Analyze the text below using the logic above. Be decisive. If you lean toward "Medium," you must first prove it is not "High" based on the definitions.
+Output Format:
+Regulatory Censure: [Rating] | [1-sentence Justification]
+Reputational Impact: [Rating] | [1-sentence Justification]
+Direct Financial Loss: [Rating] | [1-sentence Justification]
+Combined Risk Level: [Low/Medium/High/Very High]
+Final Verdict: [2-sentence reasoning for the final level]
+INPUT REGULATORY TEXT:
+[
+
