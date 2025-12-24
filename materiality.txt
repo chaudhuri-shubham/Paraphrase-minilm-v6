@@ -256,3 +256,111 @@ Final Verdict: [2-sentence reasoning for the final level]
 INPUT REGULATORY TEXT:
 [
 
+******"""""""""""
+
+
+import pandas as pd
+import os
+import json
+import time
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# --- 1. Setup ---
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --- 2. The Few-Shot System Prompt ---
+# Ensure you paste your original definitions in the placeholders below.
+SYSTEM_PROMPT = """
+You are a Senior Risk Compliance Auditor. Classify the regulatory text based STRICTLY on the definitions below.
+Avoid 'Medium' bias; be decisive.
+
+### DEFINITIONS ###
+MATRIX 1: Regulatory Censure
+- HIGH: [Paste High Def]
+- MEDIUM: [Paste Medium Def]
+- LOW: [Paste Low Def]
+
+MATRIX 2: Reputational Impact
+- HIGH: [Paste High Def]
+- MEDIUM: [Paste Medium Def]
+- LOW: [Paste Low Def]
+
+MATRIX 3: Direct Financial Loss
+- HIGH: [Paste High Def]
+- MEDIUM: [Paste Medium Def]
+- LOW: [Paste Low Def]
+
+### FEW-SHOT EXAMPLES ###
+Example 1 (HIGH): Text: "Regulator filed a public lawsuit for data breach, resulting in a $2M fine." -> {"reg_rating": "High", "rep_rating": "High", "fin_rating": "High", "combined": "Very High", "justification": "Public lawsuit and multi-million fine meet High criteria."}
+Example 2 (MEDIUM): Text: "Internal audit flagged log discrepancy; formal warning issued." -> {"reg_rating": "Medium", "rep_rating": "Low", "fin_rating": "Low", "combined": "Medium", "justification": "Internal matter with formal warning but no public or financial penalty."}
+Example 3 (LOW): Text: "Routine annual filing submitted on time." -> {"reg_rating": "Low", "rep_rating": "Low", "fin_rating": "Low", "combined": "Low", "justification": "Routine administrative task with no risk triggers."}
+
+### OUTPUT INSTRUCTIONS ###
+Return ONLY a JSON object.
+"""
+
+def classify_text(text):
+    """Function to handle the API call for a single row."""
+    if pd.isna(text) or text == "":
+        return {"reg_rating": "N/A", "rep_rating": "N/A", "fin_rating": "N/A", "combined": "N/A", "justification": "Empty input"}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Classify this: {text}"}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        return {"reg_rating": "Error", "rep_rating": "Error", "fin_rating": "Error", "combined": "Error", "justification": str(e)}
+
+def process_dataframe(df, text_column):
+    """Runs the pipeline and keeps all original columns."""
+    print(f"Starting classification on {len(df)} rows...")
+    
+    # 1. Run classification on the text column
+    raw_results = df[text_column].apply(classify_text)
+    
+    # 2. Convert list of dicts into a DataFrame
+    results_df = pd.json_normalize(raw_results)
+    
+    # 3. Concatenate original df with new results (This keeps all original columns)
+    # reset_index(drop=True) ensures indices match during the horizontal join
+    final_df = pd.concat([df.reset_index(drop=True), results_df], axis=1)
+    
+    print("Classification Complete.")
+    return final_df
+
+# --- 3. Run it ---
+if __name__ == "__main__":
+    # Example: Replace with your actual dataframe loading logic
+    # df = pd.read_csv("your_data.csv")
+    
+    # Dummy data with extra columns to demonstrate preservation
+    data = {
+        'id': [101, 102, 103],
+        'date_received': ['2025-01-10', '2025-01-12', '2025-01-15'],
+        'region': ['West Bengal', 'Karnataka', 'Maharashtra'],
+        'raw_regulatory_text': [
+            "Heavy penalty imposed for non-compliance with environmental standards.",
+            "Notification regarding change in office address submitted.",
+            "Inquiry started regarding the delay in filing taxes."
+        ]
+    }
+    df = pd.DataFrame(data)
+
+    # Process
+    output_df = process_dataframe(df, 'raw_regulatory_text')
+
+    # Now output_df contains 'id', 'date_received', 'region', AND the new AI columns
+    print(output_df.columns)
+    print(output_df.head())
+    
+    # Optional: Save to Excel/CSV
+    # output_df.to_excel("full_risk_assessment.xlsx", index=False)
