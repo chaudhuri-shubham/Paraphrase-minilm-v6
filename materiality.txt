@@ -553,4 +553,29 @@ Risk Level:
 Justification:
 
 
----
+--------------------------------------------
+
+Role: You are an expert Linguistic Analyst and Data Scientist.
+Task: I am providing you with three sets of text categorized by "Materiality Rating" (High, Medium, and Low). Your goal is to identify the underlying linguistic rules, syntactic patterns, and stylistic markers that distinguish these three categories from one another.
+Analysis Requirements:
+Do not use external definitions of materiality. Instead, look for:
+Modal Verbs: (e.g., "must," "shall," "may," "might") and their frequency in each category.
+Sentence Structure: Are the sentences complex and conditional, or simple and declarative?
+Tone and Certainty: Is the language speculative, authoritative, or descriptive?
+Key Terminology: Are there specific "power words" or technical jargon unique to specific ratings?
+Output Format:
+Please provide a "Decision Logic Table" that summarizes the rules for each category, followed by a brief explanation of the "Transition Points" (what specifically pushes a text from Medium to High).
+DATA FOR ANALYSIS
+[HIGH MATERIALITY TEXTS]:
+[Paste text 1 here]
+[Paste text 2 here]
+[MEDIUM MATERIALITY TEXTS]:
+[Paste text 1 here]
+[Paste text 2 here]
+[LOW MATERIALITY TEXTS]:
+[Paste text 1 here]
+[Paste text 2 here]
+
+
+
+
