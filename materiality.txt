@@ -577,5 +577,67 @@ DATA FOR ANALYSIS
 [Paste text 2 here]
 
 
+*******************"**
+
+You are an expert linguistic analyst and policy text reviewer.
+
+Your task is NOT to reclassify texts and NOT to use any external definitions of materiality.
+
+You must:
+- Infer generic, reusable linguistic and structural rules that distinguish High, Medium, and Low materiality texts
+- Base rules ONLY on observable patterns in the text itself
+- Ignore any provided definitions, intent descriptions, or external regulatory knowledge
+- Focus on wording, grammar, modality, tone, specificity, and consequences
+
+You must not:
+- Refer to formal definitions of High / Medium / Low
+- Rephrase or restate the labels’ meanings
+- Judge correctness of the assigned rating
+
+Below are multiple texts, each already assigned a materiality rating (High / Medium / Low).
+
+Your task is to derive GENERIC UNDERLYING RULES that explain why texts might fall into each category.
+
+Instructions:
+1. Analyze linguistic and structural patterns only
+2. Identify recurring signals such as:
+   - Modal verbs (must, should, may, etc.)
+   - Strength of obligation
+   - Specificity vs vagueness
+   - Presence of consequences, thresholds, timelines, or actions
+   - Prescriptive vs descriptive language
+   - Actor clarity (who must do what)
+3. Generalize these into reusable rules that could apply to unseen texts
+4. Do NOT quote definitions or infer intent beyond the text itself
+
+Output format (strict):
+
+High Materiality – Inferred Rules:
+- Rule 1:
+- Rule 2:
+- Rule 3:
+
+Medium Materiality – Inferred Rules:
+- Rule 1:
+- Rule 2:
+- Rule 3:
+
+Low Materiality – Inferred Rules:
+- Rule 1:
+- Rule 2:
+- Rule 3:
+
+Then provide:
+"Cross-Category Signals":
+- Signals that strongly separate High vs Medium
+- Signals that strongly separate Medium vs Low
+
+
+Important:
+- Do not default to Medium when uncertain
+- Force explicit differentiation even if signals are subtle
+- Prefer sharper, fewer rules over vague generalizations
+
+
 
 
