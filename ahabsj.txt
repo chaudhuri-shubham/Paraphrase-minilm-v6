@@ -1,3 +1,116 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import chi2_contingency
+
+# ==========================================
+# 1. DATA PREPARATION & CLEANING
+# ==========================================
+# Assuming df is your dataframe. Mocking structure below for the script to run:
+# df = pd.read_csv("your_data.csv")
+
+# Ensure Rating is an ordered category
+rating_order = ['Low', 'Medium', 'High']
+df['rating'] = pd.Categorical(df['rating'], categories=rating_order, ordered=True)
+
+def get_tidy_data(df):
+    """
+    Expands pipe-separated strings into individual rows for analysis.
+    This handles the 'A|B|C' format in themes and LOB.
+    """
+    tidy = df.copy()
+    # Replace NaN with 'Unknown' to avoid errors during split
+    for col in ['themes', 'lob', 'regulator']:
+        tidy[col] = tidy[col].fillna('Unknown').astype(str)
+        
+    tidy['themes'] = tidy['themes'].str.split('|')
+    tidy['lob'] = tidy['lob'].str.split('|')
+    
+    return tidy.explode('themes').explode('lob')
+
+df_tidy = get_tidy_data(df)
+
+# ==========================================
+# 2. INDIVIDUAL CATEGORY ANALYSIS
+# ==========================================
+print("--- [1] Analyzing Individual Impact ---")
+
+categorical_cols = ['themes', 'lob', 'regulator']
+
+for col in categorical_cols:
+    # Calculate percentages for the stacked bar
+    ct = pd.crosstab(df_tidy[col], df_tidy['rating'], normalize='index') * 100
+    
+    # Plotting
+    plt.figure(figsize=(12, 5))
+    ct.plot(kind='bar', stacked=True, color=['#a1d99b', '#feb24c', '#f03b20'], ax=plt.gca())
+    plt.title(f'Rating Distribution per {col.capitalize()}')
+    plt.ylabel('Percentage %')
+    plt.legend(title='Rating', bbox_to_anchor=(1, 1))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+# ==========================================
+# 3. COMBINATION RULES (THEME + LOB + REGULATOR)
+# ==========================================
+print("\n--- [2] Identifying 'Golden Rules' (100% Consistency) ---")
+
+def find_deterministic_rules(df, group_cols):
+    """Finds combinations that always result in the same rating."""
+    analysis = df.groupby(group_cols)['rating'].value_counts(normalize=True).unstack(fill_value=0) * 100
+    
+    # Filter for combinations where one rating is 100%
+    high_rules = analysis[analysis['High'] == 100]
+    low_rules = analysis[analysis['Low'] == 100]
+    
+    return high_rules, low_rules
+
+# Test Regulator + Theme combinations
+high_reg_theme, low_reg_theme = find_deterministic_rules(df_tidy, ['regulator', 'themes'])
+
+print("\nTop 5 Regulator+Theme combos that are ALWAYS 'High':")
+print(high_reg_theme.head(5))
+
+# ==========================================
+# 4. INTERACTION HEATMAPS
+# ==========================================
+print("\n--- [3] Visualizing Interaction Heatmaps ---")
+
+# Map Rating to Numbers for Heatmap (Low=1, Med=2, High=3)
+df_tidy['rating_score'] = df_tidy['rating'].map({'Low': 1, 'Medium': 2, 'High': 3})
+
+def plot_heatmap(df, row, col, title):
+    pivot = df.pivot_table(index=row, columns=col, values='rating_score', aggfunc='mean')
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(pivot, annot=True, cmap="YlOrRd", vmin=1, vmax=3)
+    plt.title(title)
+    plt.show()
+
+# Heatmap 1: Regulator vs Themes
+plot_heatmap(df_tidy, 'regulator', 'themes', 'Avg Rating: Regulator vs Themes (3.0 = Always High)')
+
+# Heatmap 2: LOB vs Themes
+plot_heatmap(df_tidy, 'lob', 'themes', 'Avg Rating: LOB vs Themes')
+
+# ==========================================
+# 5. STATISTICAL SIGNIFICANCE (CHI-SQUARE)
+# ==========================================
+print("\n--- [4] Statistical Association Test ---")
+
+for col in categorical_cols:
+    contingency = pd.crosstab(df_tidy[col], df_tidy['rating'])
+    chi2, p, dof, ex = chi2_contingency(contingency)
+    result = "Significant Connection" if p < 0.05 else "No Strong Connection"
+    print(f"Field: {col:10} | P-Value: {p:.4f} | Result: {result}")
+
+
+
+
+
+-----------------------
+
 Got it. Below is a product-manager friendly, non-technical, clear and decision-oriented explanation.
 I intentionally avoid model names (like W2V / TF-IDF / MiniLM) and talk only in two approaches exactly as you asked.
 
