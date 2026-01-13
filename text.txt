@@ -1,3 +1,89 @@
+
+
+import pandas as pd
+import numpy as np
+from gensim.models import Word2Vec
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, accuracy_score
+from sklearn.preprocessing import LabelEncoder
+
+# 1. Preprocessing & Tokenization
+def preprocess_text(text):
+    # Basic cleaning: lowercase and split into words
+    return str(text).lower().split()
+
+df['full_text'] = (df['description'].fillna('') + " " + 
+                   df['title'].fillna('') + " " + 
+                   df['summary'].fillna(''))
+
+df['tokenized'] = df['full_text'].apply(preprocess_text)
+
+# 2. Train Word2Vec Model
+# We train on your specific corpus to capture domain-specific terminology
+w2v_model = Word2Vec(sentences=df['tokenized'], vector_size=100, window=5, min_count=1, workers=4)
+
+def get_document_vector(tokens, model):
+    """Calculates the average vector for a list of tokens."""
+    vectors = [model.wv[word] for word in tokens if word in model.wv]
+    if len(vectors) == 0:
+        return np.zeros(model.vector_size)
+    return np.mean(vectors, axis=0)
+
+# Create the embedding matrix for all rows
+X_w2v = np.array([get_document_vector(tokens, w2v_model) for tokens in df['tokenized']])
+
+# Encode Target
+le = LabelEncoder()
+y = le.fit_transform(df['rating'])
+
+# ==========================================
+# MODEL 1: Text Only (W2V Embeddings)
+# ==========================================
+X_train_t, X_test_t, y_train_t, y_test_t = train_test_split(X_w2v, y, test_size=0.2, random_state=42)
+
+model_text = XGBClassifier(eval_metric='mlogloss')
+model_text.fit(X_train_t, y_train_t)
+y_pred_t = model_text.predict(X_test_t)
+
+print("--- Model 1: Text Only (Word2Vec) ---")
+print(f"Accuracy: {accuracy_score(y_test_t, y_pred_t):.4f}")
+
+# ==========================================
+# MODEL 2: Text (W2V) + Categorical Features
+# ==========================================
+# Expand pipe-separated categories into dummy variables
+themes_dummies = df['themes'].str.get_dummies(sep='|')
+lob_dummies = df['lob'].str.get_dummies(sep='|')
+reg_dummies = pd.get_dummies(df['regulator'], prefix='reg')
+
+# Concatenate W2V vectors with categorical dummies
+X_combined = np.hstack([X_w2v, themes_dummies.values, lob_dummies.values, reg_dummies.values])
+
+X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(X_combined, y, test_size=0.2, random_state=42)
+
+model_combined = XGBClassifier(eval_metric='mlogloss')
+model_combined.fit(X_train_c, y_train_c)
+y_pred_c = model_combined.predict(X_test_c)
+
+print("\n--- Model 2: W2V + LOB + Theme + Regulator ---")
+print(f"Accuracy: {accuracy_score(y_test_c, y_pred_c):.4f}")
+
+# ==========================================
+# 3. ANALYSIS: Does Categorical Data Help?
+# ==========================================
+# Compare F1-Scores for the 'High' class specifically
+print("\nDetailed Comparison (Class-wise):")
+print("Text-Only Report:\n", classification_report(y_test_t, y_pred_t, target_names=le.classes_))
+print("Combined Report:\n", classification_report(y_test_c, y_pred_c, target_names=le.classes_))
+
+
+
+
+
+
+****************************"
+
 Perfect 👍 — here’s how we’ll redesign Tab 1 (the “Summary of Changes”) as a bullet-point summary, making it more readable and presentation-ready while keeping Tab 2 detailed and structured.
 
 
