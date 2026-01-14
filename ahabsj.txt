@@ -1,3 +1,125 @@
+# ============================================
+# Contingency Tests: Single & Combination
+# ============================================
+
+import pandas as pd
+import numpy as np
+from scipy.stats import chi2_contingency
+
+# --------------------------------------------
+# 1. Sample data (same structure as your data)
+# --------------------------------------------
+df = pd.DataFrame({
+    "lob": ["A|B", "A|C", "B", "C|D", "A", "B|D", "A|B", "C"],
+    "themes": ["Capital", "Liquidity", "Capital|Risk", "Risk",
+               "Liquidity", "Capital", "Risk", "Capital"],
+    "regulator": ["RBI", "RBI", "SEBI", "SEBI",
+                  "RBI", "IRDAI", "RBI", "SEBI"],
+    "target": ["High", "Medium", "Low", "Medium",
+               "High", "Low", "High", "Medium"]
+})
+
+# --------------------------------------------
+# 2. Cramér’s V function
+# --------------------------------------------
+def cramers_v(ct):
+    chi2 = chi2_contingency(ct)[0]
+    n = ct.values.sum()
+    r, k = ct.shape
+    return np.sqrt(chi2 / (n * (min(r - 1, k - 1))))
+
+# --------------------------------------------
+# 3. Contingency test for ONE categorical column
+# --------------------------------------------
+def contingency_test_single(df, feature, target="target"):
+    temp = df.assign(
+        **{feature: df[feature].str.split("|")}
+    ).explode(feature)
+
+    ct = pd.crosstab(temp[feature], temp[target])
+    chi2, p_value, _, _ = chi2_contingency(ct)
+    v = cramers_v(ct)
+
+    return ct, p_value, v
+
+# --------------------------------------------
+# 4. Contingency test for COMBINATION of columns
+# --------------------------------------------
+def contingency_test_combination(
+    df, features, target="target", min_support=5
+):
+    temp = df.copy()
+
+    # Split multi-value columns
+    for col in features:
+        temp[col] = temp[col].str.split("|")
+
+    # Explode all selected columns
+    for col in features:
+        temp = temp.explode(col)
+
+    # Create combined feature
+    temp["combined"] = temp[features].agg("_".join, axis=1)
+
+    # Remove rare combinations
+    counts = temp["combined"].value_counts()
+    valid = counts[counts >= min_support].index
+    temp = temp[temp["combined"].isin(valid)]
+
+    ct = pd.crosstab(temp["combined"], temp[target])
+
+    chi2, p_value, _, _ = chi2_contingency(ct)
+    v = cramers_v(ct)
+
+    return ct, p_value, v
+
+# --------------------------------------------
+# 5. Run tests
+# --------------------------------------------
+single_features = ["lob", "themes", "regulator"]
+combination_features = [
+    ["lob", "themes"],
+    ["lob", "regulator"],
+    ["themes", "regulator"]
+]
+
+results = []
+
+# Single-column tests
+for feat in single_features:
+    ct, p, v = contingency_test_single(df, feat)
+    results.append({
+        "feature": feat,
+        "type": "single",
+        "p_value": round(p, 4),
+        "cramers_v": round(v, 3),
+        "useful": "YES" if (p < 0.05 and v >= 0.10) else "NO"
+    })
+
+# Combination tests
+for feats in combination_features:
+    ct, p, v = contingency_test_combination(df, feats)
+    results.append({
+        "feature": " + ".join(feats),
+        "type": "combination",
+        "p_value": round(p, 4),
+        "cramers_v": round(v, 3),
+        "useful": "YES" if (p < 0.05 and v >= 0.30) else "NO"
+    })
+
+# --------------------------------------------
+# 6. Final summary
+# --------------------------------------------
+summary = pd.DataFrame(results)
+
+print("\n=== CONTINGENCY TEST SUMMARY ===\n")
+print(summary)
+
+
+
+
+
+
 # ===============================
 # Contingency Test Script
 # ===============================
