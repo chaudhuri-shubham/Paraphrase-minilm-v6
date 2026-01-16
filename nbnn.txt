@@ -1,3 +1,132 @@
+import pandas as pd
+import os
+import json
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# --- 1. Configuration ---
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --- 2. Prompt Template Function ---
+def create_taxonomy_prompt(reg_text, level1_inputs, reference_df):
+    """
+    Filters the reference dataframe for relevant Level 3 options 
+    and builds the final classification prompt.
+    """
+    # Filter reference data for the specific Level 1 categories provided
+    filtered_df = reference_df[reference_df['Level 1'].isin(level1_inputs)]
+    
+    # Build the Reference Schema string
+    schema_list = []
+    for _, row in filtered_df.iterrows():
+        schema_list.append(f"- Level 3: {row['Level 3 Text']} | Definition: {row['Definition']}")
+    
+    schema_str = "\n".join(schema_list)
+
+    prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task: Analyze the Regulatory Text and map it to the most relevant Level 3 Categories from the Reference Schema below.
+
+Regulatory Text: "{reg_text}"
+Target Level 1 Context: {', '.join(level1_inputs)}
+
+### Reference Schema (Filtered for Level 1 context) ###
+{schema_str}
+
+### Instructions ###
+1. Only select categories listed in the Reference Schema above.
+2. You may select a single category, multiple categories, or "No Match" if none apply.
+3. Compare the intent of the Regulatory Text against the Definitions provided.
+
+Output ONLY a JSON object with this structure:
+{{
+  "selected_level_3": ["Category Name 1", "Category Name 2"],
+  "reasoning": "Brief explanation of the match based on definitions"
+}}
+"""
+    return prompt
+
+# --- 3. Classification Core ---
+def classify_regulatory_row(row, reference_df, text_col, l1_col):
+    """
+    Handles a single row of the input dataframe.
+    """
+    reg_text = row[text_col]
+    # Handle both single string Level 1 or a list of Level 1s
+    l1_inputs = row[l1_col] if isinstance(row[l1_col], list) else [row[l1_col]]
+    
+    prompt = create_taxonomy_prompt(reg_text, l1_inputs, reference_df)
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        return {"selected_level_3": ["Error"], "reasoning": str(e)}
+
+# --- 4. Main Pipeline ---
+def run_classification_pipeline(input_df, reference_df, text_col, l1_col):
+    print(f"Starting classification for {len(input_df)} records...")
+    
+    # Apply logic to each row
+    results = input_df.apply(lambda row: classify_regulatory_row(row, reference_df, text_col, l1_col), axis=1)
+    
+    # Normalize JSON into columns
+    results_df = pd.json_normalize(results)
+    
+    # Merge with original input_df to preserve all columns
+    final_df = pd.concat([input_df.reset_index(drop=True), results_df], axis=1)
+    
+    return final_df
+
+# --- Example Usage ---
+if __name__ == "__main__":
+    # A. Your Reference Dataframe (Taxonomy)
+    taxonomy_data = {
+        'Level 1': ['Privacy', 'Privacy', 'Finance', 'Finance'],
+        'Level 3 Text': ['Data Encryption', 'Consent Management', 'Audit Trails', 'Capital Adequacy'],
+        'Definition': [
+            'Requirement to encrypt data at rest and in transit.',
+            'Rules regarding how users opt-in or opt-out of data collection.',
+            'Maintaining logs of all financial transactions for 7 years.',
+            'Minimum liquid assets banks must hold against risk-weighted assets.'
+        ]
+    }
+    ref_df = pd.DataFrame(taxonomy_data)
+
+    # B. Your Input Dataframe (Texts to classify)
+    # Note: 'target_l1' can be a single string or a list
+    input_data = {
+        'id': [1, 2],
+        'raw_text': [
+            "Users must be given a clear way to withdraw their agreement for marketing cookies.",
+            "All transaction logs must be immutable and stored securely for 10 years."
+        ],
+        'target_l1': [['Privacy'], ['Privacy', 'Finance']] # Row 2 targets two Level 1s
+    }
+    df_to_classify = pd.DataFrame(input_data)
+
+    # C. Run
+    output_df = run_classification_pipeline(df_to_classify, ref_df, 'raw_text', 'target_l1')
+
+    # View result
+    print(output_df[['raw_text', 'selected_level_3', 'reasoning']])
+
+
+-----------------------------
+
+
+
+
+
+
+
 import os
 import fitz                            # PyMuPDF
 import math
