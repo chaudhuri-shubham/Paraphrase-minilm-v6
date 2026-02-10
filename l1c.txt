@@ -1,0 +1,99 @@
+import pandas as pd
+import os
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# --- 1. Setup ---
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# --- 2. Similarity Expansion Logic ---
+def expand_matches_with_similarity(matched_ids_str, similarity_df, threshold=0.8):
+    """
+    Takes the LLM's primary matches and looks up the similarity file 
+    to add controls with >80% similarity.
+    """
+    if not matched_ids_str or "Error" in matched_ids_str:
+        return matched_ids_str
+
+    # Clean the input string into a list of IDs
+    primary_ids = [id.strip() for id in matched_ids_str.split(',')]
+    expanded_set = set(primary_ids)
+
+    for pid in primary_ids:
+        # Find similar controls in the similarity file
+        # Assumes columns: 'control_id_a', 'control_id_b', 'similarity_score'
+        sims = similarity_df[
+            ((similarity_df['control_id_a'] == pid) | (similarity_df['control_id_b'] == pid)) & 
+            (similarity_df['similarity_score'] >= threshold)
+        ]
+        
+        for _, row in sims.iterrows():
+            expanded_set.add(row['control_id_a'])
+            expanded_set.add(row['control_id_b'])
+
+    return ", ".join(sorted(list(expanded_set)))
+
+# --- 3. Refined Prompt with Best-Fit Instruction ---
+def create_control_mapping_prompt(reg_text, filtered_controls):
+    control_list_str = "\n".join([
+        f"- ID: {r['id']} | Description: {r['control']}" 
+        for _, r in filtered_controls.iterrows()
+    ])
+    
+    return f"""
+Role: Regulatory Compliance Specialist.
+Task: Map the 'Regulatory Text' to the most relevant 'Internal Controls' from the candidate list.
+
+Regulatory Text: "{reg_text}"
+
+### Candidate Internal Controls (Filtered by Taxonomy/Location) ###
+{control_list_str}
+
+### Instructions ###
+1. Evaluate every candidate control against the regulatory text.
+2. Select all controls that provide mitigation or coverage.
+3. MANDATORY: There must be at least one match. If no control is a perfect fit, select the 'Best-Fit' or 'Closest-Related' control from the list. Do not respond with "No Match".
+
+Output Format:
+MATCHED CONTROL IDs: [List IDs, e.g., C101, C105]
+REASONING: [Brief technical explanation]
+"""
+
+# --- 4. Integrated Processing Function ---
+def process_row_with_similarity(row, control_df, similarity_df):
+    # Filter the candidate pool
+    relevant_controls = control_df[
+        (control_df['taxonomy'] == row['taxonomy']) & 
+        (control_df['location'] == row['location'])
+    ]
+
+    # Handle edge case where filter returns zero rows
+    if relevant_controls.empty:
+        return pd.Series(["Manual Review Required", "No controls exist in this taxonomy/location", "N/A"])
+
+    # Build Prompt & Call AI
+    prompt_text = create_control_mapping_prompt(row['regulatory_text'], relevant_controls)
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt_text}],
+            temperature=0
+        )
+        content = response.choices[0].message.content
+        primary_matches = content.split("MATCHED CONTROL IDs:")[1].split("REASONING:")[0].strip()
+        justification = content.split("REASONING:")[1].strip()
+        
+        # APPLY SIMILARITY LOGIC: Expand the LLM's output
+        final_matches = expand_matches_with_similarity(primary_matches, similarity_df)
+        
+    except Exception as e:
+        final_matches, justification = "Error", str(e)
+        
+    return pd.Series([final_matches, justification, prompt_text])
+
+# --- 5. Execution ---
+# df_reg[['final_control_ids', 'justification', 'full_prompt']] = df_reg.apply(
+#     lambda row: process_row_with_similarity(row, df_control, df_similarity), axis=1
+# )
