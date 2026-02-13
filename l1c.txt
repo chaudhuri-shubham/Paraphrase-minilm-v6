@@ -1,3 +1,11 @@
+=LET(
+a, TEXTSPLIT(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(A2,"[",""),"]",""),"'",""),","),
+b, TEXTSPLIT(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(B2,"[",""),"]",""),"'",""),","),
+FILTER(a, ISNA(MATCH(a,b,0)))
+)
+
+
+
 import pandas as pd
 import os
 from openai import OpenAI
