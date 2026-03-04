@@ -1,0 +1,453 @@
+import pandas as pd
+import numpy as np
+import math
+from typing import List, Dict, Tuple
+import json
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return 0.0
+    
+    dot_product = sum(a * b for a, b in zip(vec1, vec2))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(b * b for b in vec2))
+    
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    
+    return dot_product / (magnitude1 * magnitude2)
+
+
+def print_section(title: str, width: int = 80):
+    print("\n" + "=" * width)
+    print(title.center(width))
+    print("=" * width)
+
+
+def print_subsection(title: str, width: int = 80):
+    print("\n" + "-" * width)
+    print(title)
+    print("-" * width)
+
+
+def apply_fp_reduction(
+    mapped_df: pd.DataFrame,
+    controls_df: pd.DataFrame,
+    embeddings: Dict[str, List[float]],
+    threshold: float = 0.85,
+    max_controls: int = 3,
+    show_progress: bool = True
+) -> pd.DataFrame:
+    
+    if show_progress:
+        print_section("STRATEGY 6: COMBINED FALSE POSITIVE REDUCTION")
+        print(f"\nConfiguration:")
+        print(f"  Similarity Threshold: {threshold}")
+        print(f"  Max Controls: {max_controls}")
+        print(f"\nProcessing {len(mapped_df)} regulations...\n")
+    
+    result_df = mapped_df.copy()
+    result_df['all_controls_original'] = result_df['all_controls'].copy()
+    result_df['all_controls_filtered'] = None
+    result_df['fp_removed_count'] = 0
+    result_df['fp_removed_details'] = None
+    result_df['threshold_filtering'] = None
+    result_df['max_filtering'] = None
+    
+    for idx, row in result_df.iterrows():
+        regulation_id = row['regulation_id']
+        primary_control = row['primary_control']
+        original_controls = row['all_controls']
+        
+        if show_progress and (idx + 1) % max(1, len(result_df) // 10) == 0:
+            print(f"  Progress: {idx + 1}/{len(result_df)} regulations processed")
+        
+        threshold_filtered = []
+        threshold_removed = []
+        
+        if primary_control not in embeddings:
+            threshold_filtered = original_controls.copy()
+        else:
+            primary_vec = embeddings[primary_control]
+            
+            for control_id in original_controls:
+                if control_id not in embeddings:
+                    threshold_filtered.append(control_id)
+                    continue
+                
+                control_vec = embeddings[control_id]
+                similarity = cosine_similarity(primary_vec, control_vec)
+                
+                if similarity >= threshold:
+                    threshold_filtered.append(control_id)
+                else:
+                    threshold_removed.append({
+                        'control_id': control_id,
+                        'similarity': round(similarity, 3),
+                        'reason': f'Below threshold ({similarity:.3f} < {threshold})'
+                    })
+        
+        max_filtered = threshold_filtered.copy()
+        max_removed = []
+        
+        if len(threshold_filtered) > max_controls:
+            if primary_control in embeddings:
+                primary_vec = embeddings[primary_control]
+                similarities = []
+                
+                for control_id in threshold_filtered:
+                    if control_id == primary_control:
+                        similarity = 1.0
+                    elif control_id not in embeddings:
+                        similarity = 0.0
+                    else:
+                        control_vec = embeddings[control_id]
+                        similarity = cosine_similarity(primary_vec, control_vec)
+                    
+                    similarities.append((control_id, similarity))
+                
+                similarities.sort(key=lambda x: x[1], reverse=True)
+                max_filtered = [c for c, _ in similarities[:max_controls]]
+                
+                for c, sim in similarities[max_controls:]:
+                    max_removed.append({
+                        'control_id': c,
+                        'similarity': round(sim, 3),
+                        'reason': f'Exceeded max controls limit'
+                    })
+        
+        all_removed = threshold_removed + max_removed
+        result_df.at[idx, 'all_controls_filtered'] = max_filtered
+        result_df.at[idx, 'fp_removed_count'] = len(all_removed)
+        result_df.at[idx, 'fp_removed_details'] = all_removed
+        result_df.at[idx, 'threshold_filtering'] = threshold_removed
+        result_df.at[idx, 'max_filtering'] = max_removed
+    
+    result_df['all_controls'] = result_df['all_controls_filtered']
+    
+    if show_progress:
+        print("\n✓ Processing complete!")
+    
+    return result_df
+
+
+def calculate_statistics(original_df: pd.DataFrame, filtered_df: pd.DataFrame) -> Dict:
+    
+    original_controls_per_reg = original_df['all_controls'].apply(len)
+    filtered_controls_per_reg = filtered_df['all_controls'].apply(len)
+    
+    original_total = sum(len(c) for c in original_df['all_controls'])
+    filtered_total = sum(len(c) for c in filtered_df['all_controls'])
+    
+    fp_removed = original_total - filtered_total
+    fp_reduction_pct = (fp_removed / original_total * 100) if original_total > 0 else 0
+    
+    no_change = (original_controls_per_reg == filtered_controls_per_reg).sum()
+    reduced = (filtered_controls_per_reg < original_controls_per_reg).sum()
+    
+    stats = {
+        'before': {
+            'total_controls': original_total,
+            'avg_per_regulation': float(original_controls_per_reg.mean()),
+            'median_per_regulation': float(original_controls_per_reg.median()),
+            'min_per_regulation': int(original_controls_per_reg.min()),
+            'max_per_regulation': int(original_controls_per_reg.max()),
+            'std_dev': float(original_controls_per_reg.std()),
+        },
+        'after': {
+            'total_controls': filtered_total,
+            'avg_per_regulation': float(filtered_controls_per_reg.mean()),
+            'median_per_regulation': float(filtered_controls_per_reg.median()),
+            'min_per_regulation': int(filtered_controls_per_reg.min()),
+            'max_per_regulation': int(filtered_controls_per_reg.max()),
+            'std_dev': float(filtered_controls_per_reg.std()),
+        },
+        'reduction': {
+            'controls_removed': fp_removed,
+            'fp_reduction_pct': float(fp_reduction_pct),
+            'regulations_with_no_change': no_change,
+            'regulations_reduced': reduced,
+            'regulations_totally_cleared': (filtered_controls_per_reg == 0).sum(),
+        }
+    }
+    
+    return stats
+
+
+def print_statistics(stats: Dict):
+    
+    print_section("STATISTICS AND ANALYSIS")
+    
+    print("\nBEFORE FILTERING:")
+    print(f"  Total controls tagged:        {stats['before']['total_controls']:,}")
+    print(f"  Average per regulation:       {stats['before']['avg_per_regulation']:.2f}")
+    print(f"  Median per regulation:        {stats['before']['median_per_regulation']:.1f}")
+    print(f"  Range:                        {stats['before']['min_per_regulation']} - {stats['before']['max_per_regulation']}")
+    print(f"  Standard deviation:           {stats['before']['std_dev']:.2f}")
+    
+    print("\nAFTER FILTERING:")
+    print(f"  Total controls tagged:        {stats['after']['total_controls']:,}")
+    print(f"  Average per regulation:       {stats['after']['avg_per_regulation']:.2f}")
+    print(f"  Median per regulation:        {stats['after']['median_per_regulation']:.1f}")
+    print(f"  Range:                        {stats['after']['min_per_regulation']} - {stats['after']['max_per_regulation']}")
+    print(f"  Standard deviation:           {stats['after']['std_dev']:.2f}")
+    
+    print("\nFALSE POSITIVE REDUCTION:")
+    print(f"  Controls removed:             {stats['reduction']['controls_removed']:,}")
+    print(f"  FP reduction rate:            {stats['reduction']['fp_reduction_pct']:.1f}%")
+    print(f"  Regulations unchanged:        {stats['reduction']['regulations_with_no_change']}")
+    print(f"  Regulations reduced:          {stats['reduction']['regulations_reduced']}")
+    print(f"  Regulations fully cleared:    {stats['reduction']['regulations_totally_cleared']}")
+    
+    avg_improvement = stats['before']['avg_per_regulation'] - stats['after']['avg_per_regulation']
+    print(f"\nIMPROVEMENT:")
+    print(f"  Controls/regulation reduction: {avg_improvement:.2f}")
+    print(f"  Percentage improvement:        {(avg_improvement / stats['before']['avg_per_regulation'] * 100):.1f}%")
+
+
+def show_detailed_results(filtered_df: pd.DataFrame, num_examples: int = 5):
+    
+    print_section("DETAILED RESULTS - EXAMPLE REGULATIONS")
+    
+    for idx, row in filtered_df.head(num_examples).iterrows():
+        regulation_id = row['regulation_id']
+        regulation_text = row['regulatory_text']
+        if len(regulation_text) > 100:
+            regulation_text = regulation_text[:100] + "..."
+        
+        original_controls = row['all_controls_original']
+        filtered_controls = row['all_controls_filtered']
+        fp_removed = row['fp_removed_count']
+        
+        print_subsection(f"Regulation: {regulation_id}")
+        print(f"Text: {regulation_text}")
+        print(f"\nBEFORE: [{', '.join(original_controls)}]")
+        print(f"        Total: {len(original_controls)} controls")
+        print(f"\nAFTER:  [{', '.join(filtered_controls)}]")
+        print(f"        Total: {len(filtered_controls)} controls")
+        print(f"\nREMOVED: {fp_removed} false positives")
+        
+        if fp_removed > 0 and row['fp_removed_details']:
+            print("\nDetails of removed controls:")
+            for removed in row['fp_removed_details']:
+                print(f"  - {removed['control_id']}")
+                print(f"    Similarity: {removed['similarity']}")
+                print(f"    Reason: {removed['reason']}")
+
+
+def show_control_distribution(original_df: pd.DataFrame, filtered_df: pd.DataFrame):
+    
+    print_section("CONTROL DISTRIBUTION ANALYSIS")
+    
+    original_counts = original_df['all_controls'].apply(len).value_counts().sort_index()
+    filtered_counts = filtered_df['all_controls'].apply(len).value_counts().sort_index()
+    
+    print("\nBEFORE FILTERING:")
+    print("Controls | Regulations")
+    print("---------|-----------------------------------")
+    for count, freq in original_counts.items():
+        bar = "█" * (freq // max(1, freq // 20))
+        print(f"   {count:2d}    | {bar} ({freq})")
+    
+    print("\nAFTER FILTERING:")
+    print("Controls | Regulations")
+    print("---------|-----------------------------------")
+    for count, freq in filtered_counts.items():
+        bar = "█" * (freq // max(1, freq // 20))
+        print(f"   {count:2d}    | {bar} ({freq})")
+
+
+def show_top_controls_removed(filtered_df: pd.DataFrame, top_n: int = 10):
+    
+    print_section("MOST FREQUENTLY REMOVED CONTROLS")
+    
+    removed_counts = {}
+    
+    for _, row in filtered_df.iterrows():
+        if row['fp_removed_details']:
+            for removed in row['fp_removed_details']:
+                control_id = removed['control_id']
+                if control_id not in removed_counts:
+                    removed_counts[control_id] = 0
+                removed_counts[control_id] += 1
+    
+    if removed_counts:
+        sorted_removed = sorted(removed_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        print(f"\nControl ID | Times Removed | Percentage")
+        print("-----------|---------------|-------------")
+        
+        total_regulations = len(filtered_df)
+        for control_id, count in sorted_removed[:top_n]:
+            pct = (count / total_regulations * 100)
+            bar = "█" * (count // max(1, total_regulations // 30))
+            print(f"{control_id:10s} | {count:5d}         | {pct:5.1f}% {bar}")
+    else:
+        print("\nNo controls were removed (filtering had no effect).")
+
+
+def validate_results(filtered_df: pd.DataFrame, controls_df: pd.DataFrame) -> Dict:
+    
+    valid_control_ids = set(controls_df['control_id'])
+    validation_issues = []
+    
+    for idx, row in filtered_df.iterrows():
+        for control_id in row['all_controls_filtered']:
+            if control_id not in valid_control_ids:
+                validation_issues.append({
+                    'regulation_id': row['regulation_id'],
+                    'control_id': control_id,
+                    'issue': 'Control not in catalog'
+                })
+    
+    return {
+        'total_regulations': len(filtered_df),
+        'total_controls': sum(len(c) for c in filtered_df['all_controls_filtered']),
+        'issues_found': len(validation_issues),
+        'issues': validation_issues,
+        'validation_passed': len(validation_issues) == 0
+    }
+
+
+def print_validation_report(validation_result: Dict):
+    
+    print_section("VALIDATION REPORT")
+    
+    print(f"\nTotal regulations:  {validation_result['total_regulations']}")
+    print(f"Total controls:     {validation_result['total_controls']}")
+    print(f"Issues found:       {validation_result['issues_found']}")
+    
+    if validation_result['issues_found'] > 0:
+        print("\n⚠ ISSUES DETECTED:")
+        for issue in validation_result['issues'][:10]:
+            print(f"  - Regulation {issue['regulation_id']}: {issue['control_id']} - {issue['issue']}")
+        if len(validation_result['issues']) > 10:
+            print(f"  ... and {len(validation_result['issues']) - 10} more")
+    else:
+        print("\n✓ Validation PASSED! All controls are valid.")
+
+
+def save_results_to_csv(filtered_df: pd.DataFrame, filename: str = 'filtered_results.csv'):
+    
+    export_df = filtered_df[[
+        'regulation_id',
+        'regulatory_text',
+        'primary_control',
+        'all_controls',
+        'all_controls_original',
+        'fp_removed_count'
+    ]].copy()
+    
+    export_df['all_controls'] = export_df['all_controls'].apply(
+        lambda x: ', '.join(x) if isinstance(x, list) else ''
+    )
+    export_df['all_controls_original'] = export_df['all_controls_original'].apply(
+        lambda x: ', '.join(x) if isinstance(x, list) else ''
+    )
+    
+    export_df.to_csv(filename, index=False)
+    print(f"✓ Results saved to '{filename}'")
+    print(f"  File contains {len(export_df)} regulations")
+
+
+def full_fp_reduction_pipeline(
+    mapped_df: pd.DataFrame,
+    controls_df: pd.DataFrame,
+    embeddings: Dict[str, List[float]],
+    threshold: float = 0.85,
+    max_controls: int = 3,
+    show_details: bool = True,
+    num_examples: int = 5
+) -> pd.DataFrame:
+    
+    print("\n")
+    print("╔" + "=" * 78 + "╗")
+    print("║" + " " * 78 + "║")
+    print("║" + "STRATEGY 6: COMBINED FALSE POSITIVE REDUCTION".center(78) + "║")
+    print("║" + "COMPLETE ANALYSIS PIPELINE".center(78) + "║")
+    print("║" + " " * 78 + "║")
+    print("╚" + "=" * 78 + "╝")
+    
+    print("\n[STEP 1] Applying false positive filtering...")
+    filtered_df = apply_fp_reduction(
+        mapped_df,
+        controls_df,
+        embeddings,
+        threshold=threshold,
+        max_controls=max_controls,
+        show_progress=True
+    )
+    
+    print("\n[STEP 2] Calculating statistics...")
+    stats = calculate_statistics(mapped_df, filtered_df)
+    print_statistics(stats)
+    
+    print("\n[STEP 3] Analyzing control distribution...")
+    show_control_distribution(mapped_df, filtered_df)
+    
+    if show_details:
+        print("\n[STEP 4] Showing example regulations...")
+        show_detailed_results(filtered_df, num_examples=num_examples)
+    
+    print("\n[STEP 5] Analyzing removed controls...")
+    show_top_controls_removed(filtered_df, top_n=10)
+    
+    print("\n[STEP 6] Validating results...")
+    validation = validate_results(filtered_df, controls_df)
+    print_validation_report(validation)
+    
+    print_section("FINAL SUMMARY")
+    print(f"""
+✓ Filtering complete!
+
+RESULTS:
+  - Processed {len(filtered_df)} regulations
+  - Removed {stats['reduction']['controls_removed']:,} false positives ({stats['reduction']['fp_reduction_pct']:.1f}%)
+  - Reduced from {stats['before']['avg_per_regulation']:.2f} to {stats['after']['avg_per_regulation']:.2f} controls/regulation
+  - Validation: {'PASSED ✓' if validation['validation_passed'] else 'FAILED ✗'}
+
+READY FOR DEPLOYMENT ✓
+    """)
+    
+    return filtered_df
+
+
+# ============================================================================
+# USAGE IN JUPYTER
+# ============================================================================
+
+# STEP 1: Load your data
+mapped_df = pd.read_csv('your_semantic_mapping_results.csv')
+controls_df = pd.read_csv('your_controls.csv')
+
+# Load embeddings
+with open('your_embeddings.json', 'r') as f:
+    embeddings = json.load(f)
+
+print(f"Loaded {len(mapped_df)} regulations")
+print(f"Loaded {len(controls_df)} controls")
+print(f"Loaded {len(embeddings)} embeddings")
+
+# STEP 2: Check current problem (optional)
+controls_per_reg = mapped_df['all_controls'].apply(len)
+print(f"\nCurrent state:")
+print(f"  Average controls per regulation: {controls_per_reg.mean():.2f}")
+print(f"  Total controls tagged: {sum(controls_per_reg):,}")
+
+# STEP 3: Run the full pipeline
+filtered_df = full_fp_reduction_pipeline(
+    mapped_df=mapped_df,
+    controls_df=controls_df,
+    embeddings=embeddings,
+    threshold=0.85,
+    max_controls=3,
+    show_details=True,
+    num_examples=5
+)
+
+# STEP 4: Save results
+save_results_to_csv(filtered_df, 'strategy_6_results.csv')
+
+# STEP 5: Access results
+print("\nResults available in 'filtered_df'")
+print(f"Columns: {filtered_df.columns.tolist()}")
