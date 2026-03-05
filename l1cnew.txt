@@ -1,0 +1,406 @@
+import pandas as pd
+import numpy as np
+import math
+import json
+from typing import List, Dict
+import openai
+
+# Set your OpenAI API key
+openai.api_key = "your-openai-api-key"
+
+# ============================================================================
+# STEP 1: LOAD YOUR DATA
+# ============================================================================
+
+print("="*80)
+print("REGULATORY REQUIREMENT TO CONTROLS MAPPING")
+print("="*80)
+
+# Load your DataFrames
+controls_df = pd.read_csv('controls.csv')
+# Expected columns: control_id, control_description
+
+regulatory_df = pd.read_csv('regulatory_requirements.csv')
+# Expected columns: regulation_id, regulatory_summary
+
+print(f"\nLoaded {len(controls_df)} controls")
+print(f"Loaded {len(regulatory_df)} regulations")
+
+print("\n" + "="*80)
+print("CONTROLS DATA:")
+print("="*80)
+print(controls_df.head(10))
+
+print("\n" + "="*80)
+print("REGULATORY DATA:")
+print("="*80)
+print(regulatory_df.head(10))
+
+# ============================================================================
+# STEP 2: CREATE CONTROL CATALOG FOR LLM
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 1: CREATING CONTROL CATALOG")
+print("="*80)
+
+# Format controls as a readable catalog for the LLM
+control_catalog = "AVAILABLE CONTROLS:\n" + "="*80 + "\n\n"
+for idx, row in controls_df.iterrows():
+    control_catalog += f"{row['control_id']}: {row['control_description']}\n\n"
+
+print("Control catalog created")
+print(f"Total controls in catalog: {len(controls_df)}")
+
+# ============================================================================
+# STEP 3: FUNCTION TO GET LLM MAPPING
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 2: MAPPING REGULATIONS TO CONTROLS")
+print("="*80)
+
+def map_regulation_to_controls_llm(
+    regulation_id: str,
+    regulation_summary: str,
+    control_catalog: str
+) -> Dict:
+    """
+    Use ChatGPT to map a regulation to relevant controls.
+    
+    Returns:
+    - mapped_control_ids: List of control IDs
+    - mapping_reasoning: Explanation of mapping
+    """
+    
+    system_prompt = f"""You are a compliance expert who maps regulatory requirements to controls.
+
+{control_catalog}
+
+Your task: Analyze the regulatory requirement and identify ALL relevant controls from the list above.
+
+IMPORTANT RULES:
+1. Return at least 1 control (NEVER return empty list)
+2. Return ALL controls that are relevant or somewhat related
+3. Include controls that address the requirement directly
+4. Include controls that support or enable the requirement
+5. Do NOT include controls that are completely unrelated
+
+Return ONLY valid control IDs that exist in the catalog above.
+"""
+
+    user_prompt = f"""Regulation ID: {regulation_id}
+Regulatory Summary: {regulation_summary}
+
+Provide your response in this exact JSON format:
+{{
+    "control_ids": ["CONTROL_ID1", "CONTROL_ID2", ...],
+    "reasoning": "Explanation of why these controls map to the regulation"
+}}
+
+Make sure:
+- control_ids is a non-empty list
+- All IDs are from the catalog
+- reasoning explains the mapping"""
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        
+        response_text = response.choices[0].message.content
+        
+        # Parse JSON response
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}') + 1
+        json_str = response_text[start_idx:end_idx]
+        result = json.loads(json_str)
+        
+        return {
+            'regulation_id': regulation_id,
+            'mapped_control_ids': result.get('control_ids', []),
+            'mapping_reasoning': result.get('reasoning', ''),
+            'success': True
+        }
+    
+    except Exception as e:
+        print(f"Error mapping {regulation_id}: {str(e)}")
+        return {
+            'regulation_id': regulation_id,
+            'mapped_control_ids': [],
+            'mapping_reasoning': f'Error: {str(e)}',
+            'success': False
+        }
+
+
+# ============================================================================
+# STEP 4: MAP ALL REGULATIONS
+# ============================================================================
+
+print("\nMapping regulations to controls...\n")
+
+all_mappings = []
+
+for idx, row in regulatory_df.iterrows():
+    regulation_id = row['regulation_id']
+    regulation_summary = row['regulatory_summary']
+    
+    # Get mapping from LLM
+    mapping = map_regulation_to_controls_llm(
+        regulation_id=regulation_id,
+        regulation_summary=regulation_summary,
+        control_catalog=control_catalog
+    )
+    
+    all_mappings.append(mapping)
+    
+    if (idx + 1) % 5 == 0 or (idx + 1) == len(regulatory_df):
+        print(f"✓ Processed {idx + 1}/{len(regulatory_df)} regulations")
+    
+    # Show details
+    if mapping['success']:
+        print(f"  {regulation_id} → {mapping['mapped_control_ids']} ({len(mapping['mapped_control_ids'])} controls)")
+
+# ============================================================================
+# STEP 5: CREATE RESULTS DATAFRAME
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 3: CREATING RESULTS DATAFRAME")
+print("="*80)
+
+# Convert mappings to DataFrame
+results_df = pd.DataFrame(all_mappings)
+
+# Add additional columns
+results_df['num_controls_mapped'] = results_df['mapped_control_ids'].apply(len)
+
+# Merge with original regulatory data
+results_df = results_df.merge(
+    regulatory_df,
+    on='regulation_id',
+    how='left'
+)
+
+print("\nResults DataFrame:")
+print(results_df[['regulation_id', 'regulatory_summary', 'mapped_control_ids', 'num_controls_mapped']].head(10))
+
+print(f"\nStatistics:")
+print(f"  Total regulations: {len(results_df)}")
+print(f"  Successfully mapped: {results_df['success'].sum()}")
+print(f"  Failed mappings: {(~results_df['success']).sum()}")
+print(f"  Average controls per regulation: {results_df['num_controls_mapped'].mean():.2f}")
+print(f"  Min controls: {results_df['num_controls_mapped'].min()}")
+print(f"  Max controls: {results_df['num_controls_mapped'].max()}")
+
+# ============================================================================
+# STEP 6: EXPAND RESULTS (ONE ROW PER CONTROL)
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 4: CREATING EXPANDED RESULTS")
+print("="*80)
+
+# Create expanded DataFrame with one row per regulation-control pair
+expanded_rows = []
+
+for idx, row in results_df.iterrows():
+    regulation_id = row['regulation_id']
+    regulation_summary = row['regulatory_summary']
+    mapped_controls = row['mapped_control_ids']
+    reasoning = row['mapping_reasoning']
+    
+    for control_id in mapped_controls:
+        # Find control description
+        control_desc = controls_df[controls_df['control_id'] == control_id]['control_description'].values
+        
+        if len(control_desc) > 0:
+            expanded_rows.append({
+                'regulation_id': regulation_id,
+                'regulatory_summary': regulation_summary,
+                'control_id': control_id,
+                'control_description': control_desc[0],
+                'mapping_reasoning': reasoning
+            })
+
+expanded_df = pd.DataFrame(expanded_rows)
+
+print(f"\nExpanded results (one row per control-regulation pair):")
+print(f"  Total rows: {len(expanded_df)}")
+print("\nSample:")
+print(expanded_df.head(15))
+
+# ============================================================================
+# STEP 7: VALIDATE RESULTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 5: VALIDATION")
+print("="*80)
+
+# Check that all mapped controls exist in control catalog
+valid_control_ids = set(controls_df['control_id'])
+
+invalid_mappings = []
+for idx, row in expanded_df.iterrows():
+    if row['control_id'] not in valid_control_ids:
+        invalid_mappings.append({
+            'regulation_id': row['regulation_id'],
+            'control_id': row['control_id'],
+            'issue': 'Control ID not in catalog'
+        })
+
+if len(invalid_mappings) == 0:
+    print("✓ Validation PASSED - All mapped controls exist in catalog")
+else:
+    print(f"⚠ Found {len(invalid_mappings)} invalid mappings:")
+    for item in invalid_mappings[:5]:
+        print(f"  - Regulation {item['regulation_id']}: Control {item['control_id']} not found")
+
+# Check for regulations with no controls
+unmapped_regulations = results_df[results_df['num_controls_mapped'] == 0]
+if len(unmapped_regulations) > 0:
+    print(f"\n⚠ Found {len(unmapped_regulations)} regulations with no controls mapped:")
+    for idx, row in unmapped_regulations.iterrows():
+        print(f"  - {row['regulation_id']}: {row['regulatory_summary'][:60]}...")
+else:
+    print("✓ All regulations have at least 1 control mapped")
+
+# ============================================================================
+# STEP 8: SUMMARY STATISTICS
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 6: SUMMARY STATISTICS")
+print("="*80)
+
+print(f"\nMapping Coverage:")
+print(f"  Regulations processed: {len(results_df)}")
+print(f"  Total regulation-control pairs: {len(expanded_df)}")
+print(f"  Average controls per regulation: {results_df['num_controls_mapped'].mean():.2f}")
+
+print(f"\nControl Usage:")
+control_usage = expanded_df['control_id'].value_counts()
+print(f"  Most used controls:")
+for control_id, count in control_usage.head(10).items():
+    control_name = controls_df[controls_df['control_id'] == control_id]['control_description'].values
+    if len(control_name) > 0:
+        print(f"    {control_id}: {count} regulations → {control_name[0][:50]}...")
+
+print(f"\nLeast used controls:")
+for control_id, count in control_usage.tail(5).items():
+    control_name = controls_df[controls_df['control_id'] == control_id]['control_description'].values
+    if len(control_name) > 0:
+        print(f"    {control_id}: {count} regulations → {control_name[0][:50]}...")
+
+unused_controls = set(controls_df['control_id']) - set(expanded_df['control_id'])
+if len(unused_controls) > 0:
+    print(f"\nUnused controls: {len(unused_controls)}")
+    for control_id in list(unused_controls)[:5]:
+        control_name = controls_df[controls_df['control_id'] == control_id]['control_description'].values
+        if len(control_name) > 0:
+            print(f"  - {control_id}: {control_name[0][:50]}...")
+
+# ============================================================================
+# STEP 9: EXPORT RESULTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 7: EXPORTING RESULTS")
+print("="*80)
+
+# Export summary results (one row per regulation)
+results_df.to_csv('mapping_summary_results.csv', index=False)
+print("✓ Saved: mapping_summary_results.csv")
+
+# Export expanded results (one row per control-regulation pair)
+expanded_df.to_csv('mapping_detailed_results.csv', index=False)
+print("✓ Saved: mapping_detailed_results.csv")
+
+# Export as Excel for easy viewing
+with pd.ExcelWriter('mapping_results.xlsx', engine='openpyxl') as writer:
+    results_df.to_excel(writer, sheet_name='Summary', index=False)
+    expanded_df.to_excel(writer, sheet_name='Detailed', index=False)
+    
+    # Create a pivot table showing regulations vs controls
+    pivot_df = expanded_df.pivot_table(
+        index='regulation_id',
+        columns='control_id',
+        values='mapping_reasoning',
+        aggfunc='count'
+    ).fillna(0)
+    pivot_df.to_excel(writer, sheet_name='Pivot')
+
+print("✓ Saved: mapping_results.xlsx")
+
+# ============================================================================
+# STEP 10: INTERACTIVE EXPLORATION
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 8: INTERACTIVE EXPLORATION")
+print("="*80)
+
+print("\nFunctions to explore results:")
+print("""
+# View a specific regulation's mapped controls:
+reg_id = 'REG-001'
+print(results_df[results_df['regulation_id'] == reg_id])
+print("Mapped controls:", results_df[results_df['regulation_id'] == reg_id]['mapped_control_ids'].values[0])
+print("Reasoning:", results_df[results_df['regulation_id'] == reg_id]['mapping_reasoning'].values[0])
+
+# View all regulations mapped to a specific control:
+ctrl_id = 'AC-1'
+print(expanded_df[expanded_df['control_id'] == ctrl_id])
+
+# Get detailed mapping for a regulation:
+reg_details = expanded_df[expanded_df['regulation_id'] == 'REG-001']
+for idx, row in reg_details.iterrows():
+    print(f"  Control: {row['control_id']} - {row['control_description']}")
+    print(f"  Reasoning: {row['mapping_reasoning']}")
+    print()
+
+# Find regulations with too many or too few controls:
+print("Regulations with most controls:", results_df.nlargest(5, 'num_controls_mapped')[['regulation_id', 'num_controls_mapped']])
+print("Regulations with least controls:", results_df.nsmallest(5, 'num_controls_mapped')[['regulation_id', 'num_controls_mapped']])
+""")
+
+print("\n" + "="*80)
+print("MAPPING COMPLETE!")
+print("="*80)
+print("\nResults saved in:")
+print("  1. mapping_summary_results.csv - One row per regulation with all mapped controls")
+print("  2. mapping_detailed_results.csv - One row per regulation-control pair")
+print("  3. mapping_results.xlsx - Excel file with multiple sheets")
+print("\nDataFrames available as:")
+print("  - results_df: Summary results")
+print("  - expanded_df: Detailed results")
+This is a complete, fresh solution that:
+Loads your data - controls_df and regulatory_df
+Creates control catalog - Formats controls for LLM reference
+Maps regulations using GPT-4 - Uses ChatCompletion API to map each regulation to relevant controls
+Validates results - Checks that all mapped controls exist
+Creates expanded results - One row per regulation-control pair for easier analysis
+Generates statistics - Shows coverage, usage, and trends
+Exports to multiple formats - CSV and Excel files
+Provides interactive exploration - Examples of how to query and analyze results
+To use:
+# Replace with your actual API key
+openai.api_key = "sk-..."
+
+# Update CSV file names
+controls_df = pd.read_csv('your_controls_file.csv')
+regulatory_df = pd.read_csv('your_regulatory_file.csv')
+
+# Make sure columns are named:
+# controls_df: control_id, control_description
+# regulatory_df: regulation_id, regulatory_summary
+
+# Run the entire script
+No modularization, just run it in Jupyter!
