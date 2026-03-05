@@ -1,175 +1,576 @@
-Perfect — below are concrete matrices with a small, fully-worked example so you can see exactly how performance is represented.
-I’ll start with the example data, then show each matrix with numbers and interpretation.
-1️⃣ Example data (ground truth vs recommendation)
-ID
-Target (True)
-Recommended (Top-3)
-1
-a
-a|b|c
-2
-a|b
-a|b|c
-3
-a|b
-b|c|d
-4
-a|b|c
-a|b|c
-5
-b|c
-a|c|d
-6
-c
-a|b|d
-2️⃣ Derived comparison per row
-ID
-True Set
-Pred Set
-TP (match)
-FN (miss)
-1
-{a}
-{a,b,c}
-1
-0
-2
-{a,b}
-{a,b,c}
-2
-0
-3
-{a,b}
-{b,c,d}
-1
-1
-4
-{a,b,c}
-{a,b,c}
-3
-0
-5
-{b,c}
-{a,c,d}
-1
-1
-6
-{c}
-{a,b,d}
-0
-1
-3️⃣ Matrix 1: True label count × Correctly matched
-This is the most important matrix
-#True labels ↓ / #Matched →
-0
-1
-2
-3
-1
-1
-1
-0
-0
-2
-0
-2
-1
-0
-3
-0
-0
-0
-1
-How to read
-Single-label cases → 50% fully missed
-2-label cases → mostly partial matches
-3-label cases → perfect prediction
-4️⃣ Matrix 2: Exact / Partial / Miss
-Outcome
-Count
-Exact Match (FN=0)
-3
-Partial Match (TP≥1, FN≥1)
-2
-No Match (TP=0)
-1
-Interpretation
-Exact match rate = 50%
-At least one correct (Hit@3) = 83%
-Complete failure = 17%
-5️⃣ Matrix 3: Top-3 Hit Strength
-Correct in Top-3
-Meaning
-Count
-0
-Miss
-1
-1
-Weak
-3
-2
-Strong
-1
-3
-Perfect
-1
-Interpretation
-Most predictions are partially useful
-Only one perfect multi-label hit
-6️⃣ Matrix 4: Label-wise confusion summary
-Label
-TP
-FN
-FP
-a
-3
-1
-2
-b
-3
-1
-2
-c
-3
-1
-2
-d
-0
-0
-3
-Interpretation
-Labels a, b, c are learned reasonably well
-d is over-recommended (FP heavy)
-7️⃣ Executive-friendly summary matrix
-Metric
-Value
-Exact Match Rate
-50%
-Top-3 Hit Rate (≥1 correct)
-83%
-Avg Correct Labels
-1.33
-Over-prediction tendency
-High
-8️⃣ Why these matrices work (important)
-Matrix
-Answers
-True × Matched
-Can model handle complexity?
-Exact / Partial
-Business usefulness
-Hit strength
-Recommendation quality
-Label confusion
-Where model over/under predicts
-9️⃣ What I recommend you finally report
-If you present this (esp. in risk / regulatory context):
-Matrix 1 → main performance table
-Exact / Partial / Miss → management slide
-Label FP table → model tuning guidance
-If you want, next I can:
-Convert these into Excel pivot tables
-Add penalty weights (missing > extra)
-Compare Model V1 vs V2
-Create PowerPoint-ready charts
-Just tell me how this will be consumed.
+import pandas as pd
+import numpy as np
+from typing import List, Set, Dict
+import ast
+from collections import defaultdict
+import openai
+
+# Set your OpenAI API key
+openai.api_key = "your-openai-api-key"
+
+# ============================================================================
+# LOAD DATA
+# ============================================================================
+
+print("="*80)
+print("FRESH APPROACH: LLM + SEMANTIC EXPANSION FOR FLAT CONTROL STRUCTURE")
+print("="*80)
+
+# Load the main mapping DataFrame
+df = pd.read_csv('your_mapping_results.csv')
+
+# Load the similarity DataFrame
+similarity_df = pd.read_csv('control_similarity.csv')
+# Expected columns: control_id_left, control_id_right, similarity_score
+
+# Load controls catalog
+controls_df = pd.read_csv('controls.csv')
+# Expected columns: control_id, control_description
+
+print(f"\nLoaded {len(df)} regulations")
+print(f"Loaded {len(similarity_df)} control similarities")
+print(f"Loaded {len(controls_df)} controls in catalog")
+
+# Convert string lists to actual lists
+if isinstance(df['mapped_control_ids'].iloc[0], str):
+    df['mapped_control_ids'] = df['mapped_control_ids'].apply(ast.literal_eval)
+
+df['llm_controls_set'] = df['mapped_control_ids'].apply(lambda x: set(x) if isinstance(x, list) else set())
+
+# ============================================================================
+# STEP 1: BUILD CONTROL SIMILARITY NETWORK
+# ============================================================================
+
+print("\nBuilding control similarity network...")
+
+# Create dictionary of similar controls with scores
+similarity_dict = {}
+similar_controls = defaultdict(list)
+
+for idx, row in similarity_df.iterrows():
+    ctrl_left = row['control_id_left']
+    ctrl_right = row['control_id_right']
+    sim_score = row['similarity_score']
+    
+    if ctrl_left not in similarity_dict:
+        similarity_dict[ctrl_left] = {}
+    if ctrl_right not in similarity_dict:
+        similarity_dict[ctrl_right] = {}
+    
+    similarity_dict[ctrl_left][ctrl_right] = sim_score
+    similarity_dict[ctrl_right][ctrl_left] = sim_score
+    
+    # Store for easy access
+    similar_controls[ctrl_left].append((ctrl_right, sim_score))
+    similar_controls[ctrl_right].append((ctrl_left, sim_score))
+
+# Add self-similarity
+all_control_ids = set(controls_df['control_id'])
+for ctrl in all_control_ids:
+    if ctrl not in similarity_dict:
+        similarity_dict[ctrl] = {}
+    similarity_dict[ctrl][ctrl] = 1.0
+
+print(f"✓ Built similarity network with {len(similarity_dict)} controls")
+
+# Create control descriptions dict
+control_descriptions = {}
+for _, row in controls_df.iterrows():
+    control_descriptions[row['control_id']] = row['control_description']
+
+# ============================================================================
+# STEP 2: ANALYZE CONTROL SIMILARITY CLUSTERS
+# ============================================================================
+
+print("\nAnalyzing control similarity structure...")
+
+# For each control, find its closest neighbors
+control_neighbors = {}
+for ctrl in all_control_ids:
+    if ctrl in similarity_dict:
+        neighbors = sorted(
+            [(other, score) for other, score in similarity_dict[ctrl].items()],
+            key=lambda x: x[1],
+            reverse=True
+        )[1:6]  # Top 5 neighbors (excluding self)
+        control_neighbors[ctrl] = neighbors
+
+print(f"✓ Analyzed similarity neighbors for {len(control_neighbors)} controls")
+
+# ============================================================================
+# STEP 3: LLM-BASED SEMANTIC EXPANSION
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 1: LLM-BASED SEMANTIC EXPANSION")
+print("="*80)
+
+def get_llm_expansion(
+    regulation_id: str,
+    regulatory_text: str,
+    llm_controls: Set[str],
+    all_controls: Set[str],
+    control_descriptions: dict,
+    model: str = "gpt-4"
+) -> List[str]:
+    """
+    Use LLM to find additional controls that should map to this regulation.
+    """
+    
+    # Create control catalog with descriptions
+    control_catalog = "AVAILABLE CONTROLS:\n\n"
+    for ctrl in sorted(all_controls):
+        desc = control_descriptions.get(ctrl, "No description")
+        control_catalog += f"{ctrl}: {desc}\n"
+    
+    system_prompt = f"""You are a compliance expert who maps regulatory requirements to security controls.
+
+Below is the complete catalog of available controls:
+
+{control_catalog}
+
+Your task: Analyze regulatory requirements and identify ALL relevant controls from this catalog.
+
+RULES:
+1. Consider ALL controls that relate to the requirement in any way
+2. Include direct implementations and supporting controls
+3. Think broadly about related controls
+4. Return ONLY valid control IDs from the catalog
+5. Return as comma-separated list with no other text
+"""
+
+    user_prompt = f"""Regulation: {regulatory_text}
+
+LLM initially identified: {','.join(sorted(llm_controls))}
+
+Find ALL relevant controls (including the ones above). Think carefully about:
+- Direct implementations
+- Supporting controls
+- Related controls
+- Preventive controls
+- Detective controls
+- Corrective controls
+
+Return complete comma-separated list of ALL relevant control IDs.
+Return ONLY the control IDs, nothing else.
+"""
+
+    try:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=2000
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Parse control IDs
+        controls = [c.strip() for c in response_text.split(',')]
+        controls = [c for c in controls if c and c in all_controls]
+        
+        return controls
+    
+    except Exception as e:
+        print(f"  Error in LLM expansion for {regulation_id}: {str(e)}")
+        return list(llm_controls)
+
+
+print("\nApplying LLM-based semantic expansion...")
+
+df['mapped_control_ids_llm_expanded'] = None
+
+for idx, row in df.iterrows():
+    regulation_id = row['regulation_id']
+    regulatory_text = row['regulatory_summary']
+    llm_set = row['llm_controls_set']
+    
+    # Get LLM expansion
+    expanded_controls = get_llm_expansion(
+        regulation_id=regulation_id,
+        regulatory_text=regulatory_text,
+        llm_controls=llm_set,
+        all_controls=all_control_ids,
+        control_descriptions=control_descriptions,
+        model="gpt-4"
+    )
+    
+    df.at[idx, 'mapped_control_ids_llm_expanded'] = expanded_controls
+    
+    if (idx + 1) % 10 == 0:
+        print(f"  ✓ Processed {idx + 1}/{len(df)} regulations")
+
+print("✓ LLM-based expansion complete")
+
+# ============================================================================
+# STEP 4: SIMILARITY-BASED NEIGHBOR EXPANSION
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 2: SIMILARITY-BASED NEIGHBOR EXPANSION")
+print("="*80)
+
+def expand_by_neighbors(
+    controls: Set[str],
+    similarity_dict: dict,
+    control_neighbors: dict,
+    similarity_threshold: float = 0.65,
+    max_neighbors_per_control: int = 3
+) -> Set[str]:
+    """
+    For each control, add its similar neighbors.
+    """
+    
+    expanded = set(controls)
+    
+    for ctrl in controls:
+        if ctrl in control_neighbors:
+            # Add top similar neighbors
+            for neighbor, sim_score in control_neighbors[ctrl][:max_neighbors_per_control]:
+                if sim_score >= similarity_threshold:
+                    expanded.add(neighbor)
+    
+    return expanded
+
+
+print("\nApplying similarity-based neighbor expansion...")
+
+df['mapped_control_ids_similarity_expanded'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    
+    expanded = expand_by_neighbors(
+        controls=llm_set,
+        similarity_dict=similarity_dict,
+        control_neighbors=control_neighbors,
+        similarity_threshold=0.65,
+        max_neighbors_per_control=3
+    )
+    
+    df.at[idx, 'mapped_control_ids_similarity_expanded'] = sorted(list(expanded))
+
+print("✓ Similarity-based expansion complete")
+
+# ============================================================================
+# STEP 5: TRANSITIVITY EXPANSION (Controls similar to similar controls)
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 3: TRANSITIVE SIMILARITY EXPANSION")
+print("="*80)
+
+def expand_by_transitivity(
+    controls: Set[str],
+    similarity_dict: dict,
+    similarity_threshold: float = 0.70,
+    max_hops: int = 1
+) -> Set[str]:
+    """
+    Find controls that are similar to controls similar to our original controls.
+    This creates a network effect to find related controls.
+    """
+    
+    expanded = set(controls)
+    current_level = set(controls)
+    
+    for hop in range(max_hops):
+        next_level = set()
+        
+        # For each control at current level
+        for ctrl in current_level:
+            if ctrl in similarity_dict:
+                # Find all similar controls
+                for similar_ctrl, sim_score in similarity_dict[ctrl].items():
+                    if sim_score >= similarity_threshold and similar_ctrl not in expanded:
+                        next_level.add(similar_ctrl)
+                        expanded.add(similar_ctrl)
+        
+        current_level = next_level
+        if not next_level:
+            break
+    
+    return expanded
+
+
+print("\nApplying transitive similarity expansion...")
+
+df['mapped_control_ids_transitive_expanded'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    
+    expanded = expand_by_transitivity(
+        controls=llm_set,
+        similarity_dict=similarity_dict,
+        similarity_threshold=0.70,
+        max_hops=1
+    )
+    
+    df.at[idx, 'mapped_control_ids_transitive_expanded'] = sorted(list(expanded))
+
+print("✓ Transitive expansion complete")
+
+# ============================================================================
+# STEP 6: REGULATORY TEXT-BASED DISCOVERY
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 4: KEYWORD-BASED CONTROL DISCOVERY")
+print("="*80)
+
+def discover_by_keywords(
+    regulatory_text: str,
+    control_descriptions: dict,
+    current_controls: Set[str],
+    top_k: int = 5
+) -> Set[str]:
+    """
+    Find controls whose descriptions match keywords in regulatory text.
+    """
+    
+    discovered = set(current_controls)
+    
+    # Get keywords from regulatory text (simple approach: split and filter)
+    keywords = set(regulatory_text.lower().split())
+    keywords = {kw for kw in keywords if len(kw) > 3}  # Filter short words
+    
+    # Score each control based on keyword overlap
+    control_scores = {}
+    
+    for ctrl_id, description in control_descriptions.items():
+        if ctrl_id in current_controls:
+            continue
+        
+        desc_lower = description.lower()
+        score = sum(1 for kw in keywords if kw in desc_lower)
+        
+        if score > 0:
+            control_scores[ctrl_id] = score
+    
+    # Get top K controls by keyword match
+    if control_scores:
+        top_controls = sorted(control_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        for ctrl_id, score in top_controls:
+            discovered.add(ctrl_id)
+    
+    return discovered
+
+
+print("\nApplying keyword-based discovery...")
+
+df['mapped_control_ids_keyword_discovered'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    regulatory_text = row['regulatory_summary']
+    
+    discovered = discover_by_keywords(
+        regulatory_text=regulatory_text,
+        control_descriptions=control_descriptions,
+        current_controls=llm_set,
+        top_k=5
+    )
+    
+    df.at[idx, 'mapped_control_ids_keyword_discovered'] = sorted(list(discovered))
+
+print("✓ Keyword-based discovery complete")
+
+# ============================================================================
+# STEP 7: COMBINE ALL EXPANSION STRATEGIES
+# ============================================================================
+
+print("\n" + "="*80)
+print("STEP 5: COMBINING ALL STRATEGIES")
+print("="*80)
+
+def combine_all_expansions(
+    llm_controls: Set[str],
+    llm_expanded: List[str],
+    similarity_expanded: List[str],
+    transitive_expanded: List[str],
+    keyword_discovered: List[str],
+    max_total: int = 20
+) -> Set[str]:
+    """
+    Intelligently combine all expansion methods.
+    Priority: LLM > Transitive > Similarity > Keyword
+    """
+    
+    combined = set(llm_expanded)  # LLM expansion has highest priority
+    
+    # Add transitive (second priority)
+    for ctrl in transitive_expanded:
+        if len(combined) < max_total:
+            combined.add(ctrl)
+    
+    # Add similarity
+    for ctrl in similarity_expanded:
+        if len(combined) < max_total:
+            combined.add(ctrl)
+    
+    # Add keyword discovered
+    for ctrl in keyword_discovered:
+        if len(combined) < max_total:
+            combined.add(ctrl)
+    
+    # Ensure original LLM controls are included
+    combined.update(llm_controls)
+    
+    # If too many, keep top by frequency in all sources
+    if len(combined) > max_total:
+        # Score by how many sources suggested it
+        control_scores = defaultdict(int)
+        
+        for ctrl in llm_expanded:
+            control_scores[ctrl] += 3  # LLM gets highest weight
+        for ctrl in transitive_expanded:
+            control_scores[ctrl] += 2
+        for ctrl in similarity_expanded:
+            control_scores[ctrl] += 1
+        for ctrl in keyword_discovered:
+            control_scores[ctrl] += 1
+        
+        # Keep original LLM controls and top scored
+        top_controls = sorted(control_scores.items(), key=lambda x: x[1], reverse=True)
+        combined = set(llm_controls)
+        
+        for ctrl, score in top_controls:
+            if ctrl not in combined and len(combined) < max_total:
+                combined.add(ctrl)
+    
+    return combined
+
+
+print("\nCombining all expansion strategies...")
+
+df['mapped_control_ids_final'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    llm_exp = row['mapped_control_ids_llm_expanded']
+    sim_exp = row['mapped_control_ids_similarity_expanded']
+    trans_exp = row['mapped_control_ids_transitive_expanded']
+    kw_disc = row['mapped_control_ids_keyword_discovered']
+    
+    combined = combine_all_expansions(
+        llm_controls=llm_set,
+        llm_expanded=llm_exp,
+        similarity_expanded=sim_exp,
+        transitive_expanded=trans_exp,
+        keyword_discovered=kw_disc,
+        max_total=20
+    )
+    
+    df.at[idx, 'mapped_control_ids_final'] = sorted(list(combined))
+
+print("✓ Combined all strategies")
+
+# ============================================================================
+# STEP 8: SAVE RESULTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("SAVING RESULTS")
+print("="*80)
+
+output_df = df[[
+    'regulation_id',
+    'regulatory_summary',
+    'mapped_control_ids',
+    'mapped_control_ids_llm_expanded',
+    'mapped_control_ids_similarity_expanded',
+    'mapped_control_ids_transitive_expanded',
+    'mapped_control_ids_keyword_discovered',
+    'mapped_control_ids_final'
+]].copy()
+
+output_df.to_csv('improved_control_mapping_final.csv', index=False)
+print("✓ Saved: improved_control_mapping_final.csv")
+
+# ============================================================================
+# STEP 9: STATISTICS AND COMPARISON
+# ============================================================================
+
+print("\n" + "="*80)
+print("STATISTICS")
+print("="*80)
+
+original_counts = df['mapped_control_ids'].apply(len)
+llm_exp_counts = df['mapped_control_ids_llm_expanded'].apply(len)
+sim_exp_counts = df['mapped_control_ids_similarity_expanded'].apply(len)
+trans_exp_counts = df['mapped_control_ids_transitive_expanded'].apply(len)
+kw_disc_counts = df['mapped_control_ids_keyword_discovered'].apply(len)
+final_counts = df['mapped_control_ids_final'].apply(len)
+
+print(f"\nControl Counts by Method:")
+print(f"  Original LLM: Total {original_counts.sum()}, Avg {original_counts.mean():.2f}, Range {original_counts.min()}-{original_counts.max()}")
+print(f"  LLM Expansion: Total {llm_exp_counts.sum()}, Avg {llm_exp_counts.mean():.2f}")
+print(f"  Similarity Expansion: Total {sim_exp_counts.sum()}, Avg {sim_exp_counts.mean():.2f}")
+print(f"  Transitive Expansion: Total {trans_exp_counts.sum()}, Avg {trans_exp_counts.mean():.2f}")
+print(f"  Keyword Discovery: Total {kw_disc_counts.sum()}, Avg {kw_disc_counts.mean():.2f}")
+print(f"  Final Combined: Total {final_counts.sum()}, Avg {final_counts.mean():.2f}, Range {final_counts.min()}-{final_counts.max()}")
+
+print(f"\nExpansion Summary:")
+print(f"  Regulations with expanded controls: {(final_counts > original_counts).sum()} / {len(df)}")
+print(f"  Total controls added: {final_counts.sum() - original_counts.sum()}")
+print(f"  Average expansion per regulation: {(final_counts.mean() / original_counts.mean()):.2f}x")
+
+# ============================================================================
+# STEP 10: DETAILED EXAMPLES
+# ============================================================================
+
+print("\n" + "="*80)
+print("DETAILED EXAMPLES (FIRST 5 REGULATIONS)")
+print("="*80)
+
+for idx in range(min(5, len(df))):
+    row = df.iloc[idx]
+    original = set(row['mapped_control_ids'])
+    llm_exp = set(row['mapped_control_ids_llm_expanded'])
+    sim_exp = set(row['mapped_control_ids_similarity_expanded'])
+    trans_exp = set(row['mapped_control_ids_transitive_expanded'])
+    kw_disc = set(row['mapped_control_ids_keyword_discovered'])
+    final = set(row['mapped_control_ids_final'])
+    
+    print(f"\n{idx+1}. {row['regulation_id']}")
+    print(f"   Original ({len(original)}): {sorted(original)}")
+    print(f"   LLM Expanded ({len(llm_exp)}): {sorted(llm_exp)}")
+    print(f"   + Similarity ({len(sim_exp - original)} new): {sorted(sim_exp - original)}")
+    print(f"   + Transitive ({len(trans_exp - original)} new): {sorted(trans_exp - original)}")
+    print(f"   + Keyword ({len(kw_disc - original)} new): {sorted(kw_disc - original)}")
+    print(f"   Final ({len(final)}): {sorted(final)}")
+
+# ============================================================================
+# FINAL OUTPUT
+# ============================================================================
+
+print("\n" + "="*80)
+print("FINAL RESULT")
+print("="*80)
+
+print(f"\n✓ New column 'mapped_control_ids_final' created!")
+print(f"✓ This combines 4 expansion strategies:")
+print(f"  1. LLM semantic expansion (GPT-4)")
+print(f"  2. Similarity-based neighbor expansion")
+print(f"  3. Transitive similarity expansion")
+print(f"  4. Keyword-based discovery")
+
+print(f"\nUse df['mapped_control_ids_final'] for confusion matrix calculation")
+
+print("\n" + "="*80)
+print("DONE!")
+print("="*80)
+Key changes for flat control structure (L1C- only):*
+No family grouping - Works with individual controls
+Four independent strategies:
+LLM Expansion: GPT-4 finds all relevant controls
+Similarity Neighbors: Adds controls similar to LLM selections
+Transitive: Finds controls similar to similar controls (network effect)
+Keyword Discovery: Matches control descriptions to regulatory text
+Smart combining - Prioritizes LLM > Transitive > Similarity > Keyword
+No SME usage - Only validation, not mapping
+Output: mapped_control_ids_final - Ready for confusion matrix!
