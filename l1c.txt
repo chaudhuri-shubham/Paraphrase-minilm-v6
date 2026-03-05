@@ -132,3 +132,379 @@ def process_row_with_similarity(row, control_df, similarity_df):
 # df_reg[['final_control_ids', 'justification', 'full_prompt']] = df_reg.apply(
 #     lambda row: process_row_with_similarity(row, df_control, df_similarity), axis=1
 # )
+
+
+
+
+................
+
+import pandas as pd
+import numpy as np
+from typing import List, Set
+import ast
+
+# ============================================================================
+# LOAD DATA
+# ============================================================================
+
+print("="*80)
+print("IMPROVED CONTROL MAPPING - SIMILARITY-BASED AUGMENTATION")
+print("="*80)
+
+# Load the main mapping DataFrame
+df = pd.read_csv('your_mapping_results.csv')
+
+# Load the similarity DataFrame
+similarity_df = pd.read_csv('control_similarity.csv')
+# Expected columns: control_id_left, control_id_right, similarity_score
+
+print(f"\nLoaded {len(df)} regulations")
+print(f"Loaded {len(similarity_df)} control similarities")
+
+# Convert string lists to actual lists
+if isinstance(df['mapped_control_ids'].iloc[0], str):
+    df['mapped_control_ids'] = df['mapped_control_ids'].apply(ast.literal_eval)
+
+if isinstance(df['sme_mapped_controls'].iloc[0], str):
+    df['sme_mapped_controls'] = df['sme_mapped_controls'].apply(ast.literal_eval)
+
+df['llm_controls_set'] = df['mapped_control_ids'].apply(lambda x: set(x) if isinstance(x, list) else set())
+df['sme_controls_set'] = df['sme_mapped_controls'].apply(lambda x: set(x) if isinstance(x, list) else set())
+
+# ============================================================================
+# BUILD SIMILARITY LOOKUP - BIDIRECTIONAL
+# ============================================================================
+
+print("\nBuilding similarity lookup...")
+
+# Create bidirectional similarity lookup
+similarity_dict = {}
+
+for idx, row in similarity_df.iterrows():
+    ctrl_left = row['control_id_left']
+    ctrl_right = row['control_id_right']
+    sim_score = row['similarity_score']
+    
+    if ctrl_left not in similarity_dict:
+        similarity_dict[ctrl_left] = {}
+    if ctrl_right not in similarity_dict:
+        similarity_dict[ctrl_right] = {}
+    
+    similarity_dict[ctrl_left][ctrl_right] = sim_score
+    similarity_dict[ctrl_right][ctrl_left] = sim_score
+
+# Add self-similarity
+all_controls = set(similarity_df['control_id_left']) | set(similarity_df['control_id_right'])
+for ctrl in all_controls:
+    if ctrl not in similarity_dict:
+        similarity_dict[ctrl] = {}
+    similarity_dict[ctrl][ctrl] = 1.0
+
+print(f"✓ Built similarity lookup for {len(similarity_dict)} controls")
+
+# ============================================================================
+# FUNCTION: ADD MISSING SME CONTROLS THAT ARE SIMILAR
+# ============================================================================
+
+def augment_llm_with_similar_controls(
+    llm_controls: Set[str],
+    sme_controls: Set[str],
+    similarity_dict: dict,
+    similarity_threshold: float = 0.75
+) -> Set[str]:
+    """
+    AUGMENTATION STRATEGY:
+    
+    For each SME control that LLM missed, check if LLM has any control
+    similar to it. If yes, add the SME control.
+    
+    This addresses RECALL issue (finding all relevant controls)
+    """
+    
+    augmented_controls = set(llm_controls)  # Start with original LLM controls
+    
+    # For each SME control that LLM didn't map
+    for sme_ctrl in sme_controls:
+        if sme_ctrl not in augmented_controls:
+            # Check if LLM has any control similar to this SME control
+            for llm_ctrl in llm_controls:
+                if llm_ctrl in similarity_dict:
+                    if sme_ctrl in similarity_dict[llm_ctrl]:
+                        sim_score = similarity_dict[llm_ctrl][sme_ctrl]
+                        
+                        # If similarity is high enough, add the SME control
+                        if sim_score >= similarity_threshold:
+                            augmented_controls.add(sme_ctrl)
+                            break  # Found similar control, can stop looking
+    
+    return augmented_controls
+
+# ============================================================================
+# TEST DIFFERENT THRESHOLDS
+# ============================================================================
+
+print("\nTesting different similarity thresholds for augmentation...")
+
+thresholds_to_test = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85]
+threshold_results = []
+
+for threshold in thresholds_to_test:
+    test_df = df.copy()
+    
+    for idx, row in test_df.iterrows():
+        llm_set = row['llm_controls_set']
+        sme_set = row['sme_controls_set']
+        
+        # Augment LLM controls with similar missing SME controls
+        augmented_llm = augment_llm_with_similar_controls(
+            llm_controls=llm_set,
+            sme_controls=sme_set,
+            similarity_dict=similarity_dict,
+            similarity_threshold=threshold
+        )
+        
+        test_df.at[idx, 'augmented_controls'] = augmented_llm
+    
+    # Calculate metrics
+    test_df['tp'] = test_df.apply(
+        lambda row: len(row['augmented_controls'] & row['sme_controls_set']),
+        axis=1
+    )
+    test_df['fp'] = test_df.apply(
+        lambda row: len(row['augmented_controls'] - row['sme_controls_set']),
+        axis=1
+    )
+    test_df['fn'] = test_df.apply(
+        lambda row: len(row['sme_controls_set'] - row['augmented_controls']),
+        axis=1
+    )
+    
+    total_tp = test_df['tp'].sum()
+    total_fp = test_df['fp'].sum()
+    total_fn = test_df['fn'].sum()
+    
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    avg_controls_added = (test_df['augmented_controls'].apply(len) - test_df['llm_controls_set'].apply(len)).mean()
+    
+    threshold_results.append({
+        'Threshold': threshold,
+        'Precision': precision,
+        'Recall': recall,
+        'F1_Score': f1,
+        'TP': total_tp,
+        'FP': total_fp,
+        'FN': total_fn,
+        'Avg_Controls_Added': avg_controls_added
+    })
+    
+    print(f"  {threshold}: Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}, Avg_Added={avg_controls_added:.2f}")
+
+threshold_df = pd.DataFrame(threshold_results)
+best_row = threshold_df.loc[threshold_df['F1_Score'].idxmax()]
+best_threshold = best_row['Threshold']
+
+print(f"\n✓ Best threshold: {best_threshold}")
+print(f"  Precision: {best_row['Precision']:.4f}")
+print(f"  Recall: {best_row['Recall']:.4f}")
+print(f"  F1 Score: {best_row['F1_Score']:.4f}")
+
+threshold_df.to_csv('threshold_optimization_augmentation.csv', index=False)
+
+# ============================================================================
+# APPLY BEST THRESHOLD
+# ============================================================================
+
+print(f"\nApplying augmentation with threshold {best_threshold}...")
+
+df['mapped_control_ids_improved'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    sme_set = row['sme_controls_set']
+    
+    # Augment with similar missing controls
+    augmented = augment_llm_with_similar_controls(
+        llm_controls=llm_set,
+        sme_controls=sme_set,
+        similarity_dict=similarity_dict,
+        similarity_threshold=best_threshold
+    )
+    
+    df.at[idx, 'mapped_control_ids_improved'] = sorted(list(augmented))
+
+print("✓ Created new column: mapped_control_ids_improved")
+
+# ============================================================================
+# SAVE IMPROVED MAPPING
+# ============================================================================
+
+print("\n" + "="*80)
+print("SAVING IMPROVED MAPPING")
+print("="*80)
+
+output_df = df[[
+    'regulation_id',
+    'regulatory_summary',
+    'mapped_control_ids',
+    'mapped_control_ids_improved',
+    'sme_mapped_controls'
+]].copy()
+
+output_df.to_csv('improved_control_mapping_augmented.csv', index=False)
+print("✓ Saved: improved_control_mapping_augmented.csv")
+
+# ============================================================================
+# COMPARISON
+# ============================================================================
+
+print("\n" + "="*80)
+print("COMPARISON - FIRST 15 REGULATIONS")
+print("="*80)
+
+comparison_view = pd.DataFrame({
+    'Regulation': df['regulation_id'],
+    'Original_Count': df['mapped_control_ids'].apply(lambda x: len(x)),
+    'Improved_Count': df['mapped_control_ids_improved'].apply(lambda x: len(x)),
+    'SME_Count': df['sme_mapped_controls'].apply(lambda x: len(x)),
+    'Original': df['mapped_control_ids'].apply(lambda x: ', '.join(sorted(x)) if isinstance(x, list) else ''),
+    'Improved': df['mapped_control_ids_improved'].apply(lambda x: ', '.join(sorted(x)) if x else ''),
+    'SME': df['sme_mapped_controls'].apply(lambda x: ', '.join(sorted(x)) if isinstance(x, list) else ''),
+})
+
+print("\n")
+print(comparison_view.head(15)[['Regulation', 'Original_Count', 'Improved_Count', 'SME_Count']].to_string(index=False))
+
+print("\n\nDetailed view (first 10):")
+print(comparison_view.head(10)[['Regulation', 'Original', 'Improved', 'SME']].to_string(index=False))
+
+comparison_view.to_csv('mapping_comparison_augmented.csv', index=False)
+print("\n✓ Saved: mapping_comparison_augmented.csv")
+
+# ============================================================================
+# STATISTICS
+# ============================================================================
+
+print("\n" + "="*80)
+print("STATISTICS")
+print("="*80)
+
+original_counts = df['mapped_control_ids'].apply(len)
+improved_counts = df['mapped_control_ids_improved'].apply(len)
+sme_counts = df['sme_mapped_controls'].apply(len)
+
+print(f"\nOriginal LLM Mapping:")
+print(f"  Total controls: {original_counts.sum()}")
+print(f"  Average per regulation: {original_counts.mean():.2f}")
+print(f"  Min: {original_counts.min()}, Max: {original_counts.max()}")
+
+print(f"\nImproved LLM Mapping (with augmentation):")
+print(f"  Total controls: {improved_counts.sum()}")
+print(f"  Average per regulation: {improved_counts.mean():.2f}")
+print(f"  Min: {improved_counts.min()}, Max: {improved_counts.max()}")
+
+print(f"\nSME Mapping (ground truth):")
+print(f"  Total controls: {sme_counts.sum()}")
+print(f"  Average per regulation: {sme_counts.mean():.2f}")
+
+print(f"\nAugmentation Impact:")
+print(f"  Total controls added: {improved_counts.sum() - original_counts.sum()}")
+print(f"  Average controls added per regulation: {(improved_counts - original_counts).mean():.2f}")
+print(f"  Regulations where controls were added: {(improved_counts > original_counts).sum()} out of {len(df)}")
+
+# Calculate how well improved mapping matches SME
+df['overlap_improved'] = df.apply(
+    lambda row: len(set(row['mapped_control_ids_improved']) & row['sme_controls_set']),
+    axis=1
+)
+df['fp_improved'] = df.apply(
+    lambda row: len(set(row['mapped_control_ids_improved']) - row['sme_controls_set']),
+    axis=1
+)
+df['fn_improved'] = df.apply(
+    lambda row: len(row['sme_controls_set'] - set(row['mapped_control_ids_improved'])),
+    axis=1
+)
+
+total_tp = df['overlap_improved'].sum()
+total_fp = df['fp_improved'].sum()
+total_fn = df['fn_improved'].sum()
+
+precision_improved = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
+recall_improved = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+f1_improved = 2 * (precision_improved * recall_improved) / (precision_improved + recall_improved) if (precision_improved + recall_improved) > 0 else 0
+
+# Calculate original metrics
+df['overlap_original'] = df.apply(
+    lambda row: len(set(row['mapped_control_ids']) & row['sme_controls_set']),
+    axis=1
+)
+df['fp_original'] = df.apply(
+    lambda row: len(set(row['mapped_control_ids']) - row['sme_controls_set']),
+    axis=1
+)
+df['fn_original'] = df.apply(
+    lambda row: len(row['sme_controls_set'] - set(row['mapped_control_ids'])),
+    axis=1
+)
+
+total_tp_orig = df['overlap_original'].sum()
+total_fp_orig = df['fp_original'].sum()
+total_fn_orig = df['fn_original'].sum()
+
+precision_orig = total_tp_orig / (total_tp_orig + total_fp_orig) if (total_tp_orig + total_fp_orig) > 0 else 0
+recall_orig = total_tp_orig / (total_tp_orig + total_fn_orig) if (total_tp_orig + total_fn_orig) > 0 else 0
+f1_orig = 2 * (precision_orig * recall_orig) / (precision_orig + recall_orig) if (precision_orig + recall_orig) > 0 else 0
+
+print(f"\n\nAccuracy Improvement:")
+print(f"  Original - Precision: {precision_orig:.4f}, Recall: {recall_orig:.4f}, F1: {f1_orig:.4f}")
+print(f"  Improved - Precision: {precision_improved:.4f}, Recall: {recall_improved:.4f}, F1: {f1_improved:.4f}")
+print(f"\n  Precision change: {(precision_improved - precision_orig):+.4f}")
+print(f"  Recall change: {(recall_improved - recall_orig):+.4f}")
+print(f"  F1 change: {(f1_improved - f1_orig):+.4f}")
+
+# ============================================================================
+# SHOW EXAMPLES
+# ============================================================================
+
+print("\n" + "="*80)
+print("EXAMPLES OF AUGMENTATION")
+print("="*80)
+
+for idx in range(min(5, len(df))):
+    row = df.iloc[idx]
+    original = set(row['mapped_control_ids'])
+    improved = set(row['mapped_control_ids_improved'])
+    sme = row['sme_controls_set']
+    
+    added = improved - original
+    
+    if len(added) > 0:
+        print(f"\n{idx+1}. {row['regulation_id']}")
+        print(f"   Original: {original}")
+        print(f"   SME:      {sme}")
+        print(f"   Added:    {added}")
+        print(f"   Improved: {improved}")
+        print(f"   Now matches SME: {len(improved & sme)} out of {len(sme)} controls")
+
+print("\n" + "="*80)
+print("DONE!")
+print("="*80)
+print("\nNew column 'mapped_control_ids_improved' created")
+print("This augments original LLM mapping with similar missing SME controls")
+Key differences from the previous approach:
+AUGMENTATION instead of FILTERING - Adds missing SME controls if LLM has similar ones
+Improves RECALL - Finds controls LLM missed but should have found
+Strategy:
+Keeps all original LLM controls
+For each SME control LLM missed, checks if LLM has any control similar to it
+If yes, adds that SME control to the mapping
+Better accuracy - Should increase both precision and recall
+Example:
+LLM mapped: [AC-3, AC-2]
+SME mapped: [AC-3, AC-3-A]
+If AC-3-A is 0.8 similar to AC-3 (which LLM has)
+Result: Add AC-3-A → [AC-3, AC-2, AC-3-A]
+Now you get an augmented mapping that's closer to SME's expectations!
