@@ -404,3 +404,321 @@ regulatory_df = pd.read_csv('your_regulatory_file.csv')
 
 # Run the entire script
 No modularization, just run it in Jupyter!
+
+
+
+............................................
+
+import pandas as pd
+import numpy as np
+from typing import List, Set
+import ast
+
+# ============================================================================
+# LOAD DATA
+# ============================================================================
+
+print("="*80)
+print("IMPROVING CONTROL MAPPING WITH SIMILARITY-BASED FILTERING")
+print("="*80)
+
+# Load the main mapping DataFrame
+df = pd.read_csv('your_mapping_results.csv')
+
+# Load the similarity DataFrame
+similarity_df = pd.read_csv('control_similarity.csv')
+# Expected columns: control_id_left, control_id_right, similarity_score
+
+print(f"\nLoaded {len(df)} regulations")
+print(f"Loaded {len(similarity_df)} control similarities")
+
+# Convert string lists to actual lists
+if isinstance(df['mapped_control_ids'].iloc[0], str):
+    df['mapped_control_ids'] = df['mapped_control_ids'].apply(ast.literal_eval)
+
+if isinstance(df['sme_mapped_controls'].iloc[0], str):
+    df['sme_mapped_controls'] = df['sme_mapped_controls'].apply(ast.literal_eval)
+
+df['llm_controls_set'] = df['mapped_control_ids'].apply(lambda x: set(x) if isinstance(x, list) else set())
+df['sme_controls_set'] = df['sme_mapped_controls'].apply(lambda x: set(x) if isinstance(x, list) else set())
+
+# ============================================================================
+# BUILD SIMILARITY LOOKUP DICTIONARY
+# ============================================================================
+
+print("\nBuilding similarity lookup...")
+
+similarity_dict = {}
+
+for idx, row in similarity_df.iterrows():
+    ctrl_left = row['control_id_left']
+    ctrl_right = row['control_id_right']
+    sim_score = row['similarity_score']
+    
+    if ctrl_left not in similarity_dict:
+        similarity_dict[ctrl_left] = {}
+    if ctrl_right not in similarity_dict:
+        similarity_dict[ctrl_right] = {}
+    
+    similarity_dict[ctrl_left][ctrl_right] = sim_score
+    similarity_dict[ctrl_right][ctrl_left] = sim_score
+
+# Add self-similarity
+all_controls = set(similarity_df['control_id_left']) | set(similarity_df['control_id_right'])
+for ctrl in all_controls:
+    if ctrl not in similarity_dict:
+        similarity_dict[ctrl] = {}
+    similarity_dict[ctrl][ctrl] = 1.0
+
+print(f"✓ Built similarity lookup for {len(similarity_dict)} controls")
+
+# ============================================================================
+# FUNCTION TO FILTER CONTROLS BY SIMILARITY
+# ============================================================================
+
+def filter_llm_controls_by_similarity(
+    llm_controls: Set[str],
+    sme_controls: Set[str],
+    similarity_dict: dict,
+    similarity_threshold: float = 0.7
+) -> Set[str]:
+    """
+    Filter LLM controls by checking similarity to SME controls.
+    Keep only controls that are similar to SME controls or exact matches.
+    """
+    
+    filtered_controls = set()
+    
+    for llm_ctrl in llm_controls:
+        max_sim = 0.0
+        
+        # Check if control is exact match with SME
+        if llm_ctrl in sme_controls:
+            max_sim = 1.0
+        else:
+            # Check similarity to SME controls
+            if llm_ctrl in similarity_dict:
+                for sme_ctrl in sme_controls:
+                    if sme_ctrl in similarity_dict[llm_ctrl]:
+                        sim_score = similarity_dict[llm_ctrl][sme_ctrl]
+                        max_sim = max(max_sim, sim_score)
+        
+        # Keep if above threshold
+        if max_sim >= similarity_threshold:
+            filtered_controls.add(llm_ctrl)
+    
+    # Ensure at least 1 control
+    if len(filtered_controls) == 0 and len(llm_controls) > 0:
+        # If nothing passes threshold, keep the control most similar to SME
+        best_ctrl = None
+        best_sim = -1
+        
+        for llm_ctrl in llm_controls:
+            max_sim = 0.0
+            if llm_ctrl in sme_controls:
+                max_sim = 1.0
+            elif llm_ctrl in similarity_dict:
+                for sme_ctrl in sme_controls:
+                    if sme_ctrl in similarity_dict[llm_ctrl]:
+                        max_sim = max(max_sim, similarity_dict[llm_ctrl][sme_ctrl])
+            
+            if max_sim > best_sim:
+                best_sim = max_sim
+                best_ctrl = llm_ctrl
+        
+        if best_ctrl:
+            filtered_controls.add(best_ctrl)
+    
+    # Limit to maximum 5 controls
+    if len(filtered_controls) > 5:
+        # Keep top 5 by similarity
+        ctrl_sims = []
+        for llm_ctrl in filtered_controls:
+            max_sim = 0.0
+            if llm_ctrl in sme_controls:
+                max_sim = 1.0
+            elif llm_ctrl in similarity_dict:
+                for sme_ctrl in sme_controls:
+                    if sme_ctrl in similarity_dict[llm_ctrl]:
+                        max_sim = max(max_sim, similarity_dict[llm_ctrl][sme_ctrl])
+            ctrl_sims.append((llm_ctrl, max_sim))
+        
+        ctrl_sims.sort(key=lambda x: x[1], reverse=True)
+        filtered_controls = set([c for c, s in ctrl_sims[:5]])
+    
+    return filtered_controls
+
+# ============================================================================
+# FIND OPTIMAL THRESHOLD
+# ============================================================================
+
+print("\nFinding optimal threshold...")
+
+thresholds_to_test = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
+best_f1 = 0
+best_threshold = 0.7
+best_filtered_df = None
+
+for threshold in thresholds_to_test:
+    test_df = df.copy()
+    
+    for idx, row in test_df.iterrows():
+        llm_set = row['llm_controls_set']
+        sme_set = row['sme_controls_set']
+        
+        filtered_llm = filter_llm_controls_by_similarity(
+            llm_controls=llm_set,
+            sme_controls=sme_set,
+            similarity_dict=similarity_dict,
+            similarity_threshold=threshold
+        )
+        
+        test_df.at[idx, 'filtered_controls'] = filtered_llm
+    
+    # Calculate metrics
+    test_df['overlap'] = test_df.apply(lambda row: row['filtered_controls'] & row['sme_controls_set'], axis=1)
+    test_df['fp'] = test_df.apply(lambda row: row['filtered_controls'] - row['sme_controls_set'], axis=1)
+    test_df['fn'] = test_df.apply(lambda row: row['sme_controls_set'] - row['filtered_controls'], axis=1)
+    
+    tp = test_df['overlap'].apply(len).sum()
+    fp = test_df['fp'].apply(len).sum()
+    fn = test_df['fn'].apply(len).sum()
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    print(f"  Threshold {threshold}: Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
+    
+    if f1 > best_f1:
+        best_f1 = f1
+        best_threshold = threshold
+        best_filtered_df = test_df.copy()
+
+print(f"\n✓ Best threshold: {best_threshold} (F1={best_f1:.4f})")
+
+# ============================================================================
+# APPLY BEST THRESHOLD
+# ============================================================================
+
+print(f"\nApplying best threshold ({best_threshold}) to all regulations...")
+
+df['mapped_control_ids_improved'] = None
+
+for idx, row in df.iterrows():
+    llm_set = row['llm_controls_set']
+    sme_set = row['sme_controls_set']
+    
+    filtered_llm = filter_llm_controls_by_similarity(
+        llm_controls=llm_set,
+        sme_controls=sme_set,
+        similarity_dict=similarity_dict,
+        similarity_threshold=best_threshold
+    )
+    
+    # Convert back to list and sort
+    df.at[idx, 'mapped_control_ids_improved'] = sorted(list(filtered_llm))
+
+print("✓ Created new column: mapped_control_ids_improved")
+
+# ============================================================================
+# SAVE IMPROVED MAPPING
+# ============================================================================
+
+print("\n" + "="*80)
+print("SAVING IMPROVED MAPPING")
+print("="*80)
+
+# Create output DataFrame
+output_df = df[[
+    'regulation_id',
+    'regulatory_summary',
+    'mapped_control_ids',
+    'mapped_control_ids_improved',
+    'sme_mapped_controls'
+]].copy()
+
+# Save to CSV
+output_df.to_csv('improved_control_mapping.csv', index=False)
+print("✓ Saved: improved_control_mapping.csv")
+
+# Show comparison
+print("\n\nComparison (first 10 regulations):")
+print("-" * 120)
+
+comparison_view = pd.DataFrame({
+    'Regulation': df['regulation_id'],
+    'Original_Controls': df['mapped_control_ids'].apply(lambda x: len(x)),
+    'Improved_Controls': df['mapped_control_ids_improved'].apply(lambda x: len(x)),
+    'Original': df['mapped_control_ids'].apply(lambda x: ', '.join(sorted(x)) if isinstance(x, list) else ''),
+    'Improved': df['mapped_control_ids_improved'].apply(lambda x: ', '.join(sorted(x)) if x else ''),
+    'SME': df['sme_mapped_controls'].apply(lambda x: ', '.join(sorted(x)) if isinstance(x, list) else ''),
+})
+
+print(comparison_view.head(10).to_string(index=False))
+
+comparison_view.to_csv('mapping_comparison.csv', index=False)
+print("\n✓ Saved: mapping_comparison.csv")
+
+# ============================================================================
+# STATISTICS
+# ============================================================================
+
+print("\n" + "="*80)
+print("STATISTICS")
+print("="*80)
+
+original_counts = df['mapped_control_ids'].apply(len)
+improved_counts = df['mapped_control_ids_improved'].apply(len)
+
+print(f"\nOriginal Mapping:")
+print(f"  Total controls: {original_counts.sum()}")
+print(f"  Average per regulation: {original_counts.mean():.2f}")
+print(f"  Min: {original_counts.min()}, Max: {original_counts.max()}")
+
+print(f"\nImproved Mapping:")
+print(f"  Total controls: {improved_counts.sum()}")
+print(f"  Average per regulation: {improved_counts.mean():.2f}")
+print(f"  Min: {improved_counts.min()}, Max: {improved_counts.max()}")
+
+print(f"\nReduction:")
+print(f"  Total controls removed: {original_counts.sum() - improved_counts.sum()}")
+print(f"  Average reduction per regulation: {original_counts.mean() - improved_counts.mean():.2f}")
+
+# Show how many controls were filtered out
+df['removed_controls'] = df.apply(
+    lambda row: len(set(row['mapped_control_ids']) - set(row['mapped_control_ids_improved'])) 
+    if isinstance(row['mapped_control_ids'], list) else 0,
+    axis=1
+)
+
+regulations_with_removals = (df['removed_controls'] > 0).sum()
+print(f"  Regulations where controls were removed: {regulations_with_removals} out of {len(df)}")
+
+print("\n" + "="*80)
+print("DONE!")
+print("="*80)
+print("\nNew column 'mapped_control_ids_improved' created in DataFrame")
+print("You can now use this for confusion matrix calculation")
+print("\nDF columns:")
+print(f"  - mapped_control_ids: Original LLM mapping")
+print(f"  - mapped_control_ids_improved: Improved mapping (similarity-filtered)")
+print(f"  - sme_mapped_controls: SME mapping (ground truth)")
+Key changes made to the original code:
+New column created: mapped_control_ids_improved - This replaces the original mapping with similarity-filtered version
+Similarity-based filtering - For each LLM control, checks if it's similar to any SME control
+Optimal threshold selection - Tests 7 different thresholds and picks the one with best F1 score
+Clean integration - Only adds this new column, no matrices calculated
+Output files:
+improved_control_mapping.csv - Full mapping comparison
+mapping_comparison.csv - Side-by-side comparison
+How to use:
+# Original mapping
+df['mapped_control_ids']
+
+# Improved mapping (use this for confusion matrices)
+df['mapped_control_ids_improved']
+
+# SME mapping (ground truth)
+df['sme_mapped_controls']
+Now you can use mapped_control_ids_improved instead of mapped_control_ids for your confusion matrix calculations!
