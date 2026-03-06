@@ -524,3 +524,110 @@ print("="*80)
 **Output Files:**
 - `fpr_reduced_gpt4_2methods.csv` - Final mapping with all stages
 - `gpt4_validation_log.csv` - Detailed GPT-4 validation results
+
+
+
+........................................
+
+# ============================================================================
+# METHOD 3: CONFIDENCE SCORING & AGGRESSIVE FILTERING
+# ============================================================================
+
+print("\n" + "="*80)
+print("METHOD 3: CONFIDENCE SCORING & AGGRESSIVE FILTERING")
+print("="*80)
+
+def calculate_confidence_score(control_id, regulation_controls, similarity_dict):
+    """
+    Calculate confidence score for each control (0-1 scale).
+    
+    Factors:
+    - Connection strength: Max similarity to any other control
+    - Network density: Number of strong connections (>0.65)
+    - Average similarity: How well it fits with the group
+    """
+    
+    if control_id not in similarity_dict:
+        return 0.0
+    
+    # Factor 1: Max similarity (0-0.4)
+    max_sim = 0.0
+    for other_ctrl in regulation_controls:
+        if control_id != other_ctrl and other_ctrl in similarity_dict[control_id]:
+            max_sim = max(max_sim, similarity_dict[control_id][other_ctrl])
+    max_sim_score = max_sim * 0.4
+    
+    # Factor 2: Strong connections count (0-0.3)
+    strong_count = 0
+    for other_ctrl in regulation_controls:
+        if control_id != other_ctrl and other_ctrl in similarity_dict[control_id]:
+            if similarity_dict[control_id][other_ctrl] >= 0.65:
+                strong_count += 1
+    
+    max_possible_connections = max(len(regulation_controls) - 1, 1)
+    strong_connection_score = (strong_count / max_possible_connections) * 0.3
+    
+    # Factor 3: Average similarity (0-0.3)
+    similarities = []
+    for other_ctrl in regulation_controls:
+        if control_id != other_ctrl and other_ctrl in similarity_dict[control_id]:
+            similarities.append(similarity_dict[control_id][other_ctrl])
+    
+    if similarities:
+        avg_sim_score = np.mean(similarities) * 0.3
+    else:
+        avg_sim_score = 0.0
+    
+    total_confidence = max_sim_score + strong_connection_score + avg_sim_score
+    
+    return total_confidence
+
+print("\nCalculating confidence scores...")
+
+confidence_results = []
+
+for idx, row in df.iterrows():
+    controls = row['method_2_similarity_filtered']
+    
+    if not controls:
+        confidence_results.append({})
+        continue
+    
+    confidences = {}
+    for ctrl in controls:
+        conf = calculate_confidence_score(ctrl, controls, similarity_dict)
+        confidences[ctrl] = conf
+    
+    confidence_results.append(confidences)
+
+df['control_confidences'] = confidence_results
+
+# Filter by confidence: Keep only controls with confidence > 0.55
+print("\nFiltering by confidence score (threshold: 0.55)...")
+
+method3_results = []
+
+for idx, row in df.iterrows():
+    controls = row['method_2_similarity_filtered']
+    confidences = row['control_confidences']
+    
+    # Keep controls with confidence > 0.55
+    high_confidence = set()
+    for ctrl in controls:
+        conf = confidences.get(ctrl, 0)
+        if conf > 0.55:
+            high_confidence.add(ctrl)
+    
+    # If all removed, keep top 1
+    if len(high_confidence) == 0 and controls:
+        best_ctrl = max(controls, key=lambda x: confidences.get(x, 0))
+        high_confidence.add(best_ctrl)
+    
+    method3_results.append(high_confidence)
+
+df['method_3_confidence_filtered'] = method3_results
+
+after_m3_avg = df['method_3_confidence_filtered'].apply(len).mean()
+
+print(f"Confidence Filtering Results: {after_m2_avg:.2f} → {after_m3_avg:.2f} controls/reg")
+This is the new Method 3 module that should be added after Method 2 in your existing code.
