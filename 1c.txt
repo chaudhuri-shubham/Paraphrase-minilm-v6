@@ -1,18 +1,14 @@
 import pandas as pd
 import numpy as np
-from typing import Set, Dict, List
-import ast
 from openai import OpenAI
-import json
 from collections import defaultdict
 
 # Initialize OpenAI client
 client = OpenAI(api_key="your-openai-api-key")
 
 print("="*80)
-print("REGULATORY TEXT TO CONTROL MAPPING")
-print("Coverage-Focused Approach (NO Golden Source Used)")
-print("Using GPT-4o Mini for Cost-Effectiveness")
+print("REGULATORY TEXT TO CONTROL MAPPING - SIMPLIFIED")
+print("Using GPT-4o Mini with Direct LLM-based Mapping")
 print("="*80)
 
 # ============================================================================
@@ -21,655 +17,169 @@ print("="*80)
 
 print("\nLoading data...")
 
-# Load regulatory texts
 regulatory_df = pd.read_csv('regulatory_texts.csv')
-# Expected columns: regulation_id, regulatory_summary, regulatory_title
-
-# Load control catalog (1600 controls)
 controls_df = pd.read_csv('controls_catalog.csv')
-# Expected columns: control_id, control_title, control_description
 
 print(f"  Regulatory Texts: {len(regulatory_df)}")
 print(f"  Control Catalog: {len(controls_df)} controls")
 
-# Build control catalog dictionary
+# Build control catalog
 control_catalog = {}
 for _, row in controls_df.iterrows():
     ctrl_id = row['control_id']
     title = row['control_title']
     desc = row['control_description']
-    control_catalog[ctrl_id] = {
-        'title': title,
-        'description': desc
-    }
+    control_catalog[ctrl_id] = f"{ctrl_id}: {title}"
 
 print(f"✓ Control catalog built: {len(control_catalog)} controls")
 
 # ============================================================================
-# STRATEGY: COVERAGE-FOCUSED MAPPING (NO GOLDEN SOURCE)
+# BATCH CONTROLS FOR LLM (Send in batches of 100)
 # ============================================================================
 
 print("\n" + "="*80)
-print("MAPPING STRATEGY: COVERAGE-FOCUSED")
+print("Preparing control batches for LLM processing...")
 print("="*80)
 
-print("""
-Approach (NO Golden Source Used):
-  1. DIRECT MATCH: Extract keywords from regulation
-  2. SEMANTIC EXPANSION: Use LLM to identify relevant control domains
-  3. BATCH LLM VALIDATION: LLM selects best matching controls from candidates
-  4. CONFIDENCE SCORING: Score controls by relevance strength
-  5. FINAL SELECTION: Keep top controls with good confidence scores
-  
-Goal: Maximize coverage (5-6+ controls per regulation)
-Acceptable: Some false positives (trading precision for recall)
-""")
+control_ids = list(control_catalog.keys())
+batch_size = 100
+
+control_batches = []
+for i in range(0, len(control_ids), batch_size):
+    batch = control_ids[i:i+batch_size]
+    control_batches.append(batch)
+
+print(f"✓ Created {len(control_batches)} batches of {batch_size} controls each")
 
 # ============================================================================
-# STEP 1: BUILD CONTROL INDEX FOR FAST LOOKUP
+# MAIN MAPPING FUNCTION
 # ============================================================================
 
-print("\nSTEP 1: Building control index...")
-
-# Index controls by keywords in title and description
-control_keywords = {}
-control_domains = {}
-
-for ctrl_id, info in control_catalog.items():
-    keywords = set()
-    
-    # Extract keywords from title
-    title_words = str(info['title']).lower().split()
-    keywords.update(title_words)
-    
-    # Extract keywords from description
-    desc_words = str(info['description']).lower().split()
-    keywords.update(desc_words)
-    
-    # Remove common words
-    common_words = {'the', 'a', 'an', 'and', 'or', 'is', 'are', 'be', 'to', 'of', 'in', 'for', 'with', 'by', 'on', 'at', 'this', 'that', 'which', 'who', 'should', 'must', 'shall', 'will', 'can', 'may', 'could', 'would', 'not', 'no', 'yes', 'or', 'it', 'its', 'as', 'from', 'do', 'does', 'did', 'have', 'has', 'had'}
-    keywords = {kw for kw in keywords if len(kw) > 2 and kw not in common_words}
-    
-    control_keywords[ctrl_id] = keywords
-    
-    # Extract domain from title (first 1-2 words)
-    domain_words = title_words[:2]
-    domain = ' '.join(domain_words).lower()
-    control_domains[ctrl_id] = domain
-
-print(f"✓ Indexed {len(control_keywords)} controls")
-
-# ============================================================================
-# STEP 2: DIRECT KEYWORD MATCHING
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 2: DIRECT KEYWORD MATCHING")
-print("="*80)
-
-def extract_regulation_keywords(regulation_text, regulation_title, min_length=3):
-    """Extract important keywords from regulation."""
-    
-    keywords = set()
-    
-    # Title keywords (higher priority)
-    title_words = str(regulation_title).lower().split()
-    keywords.update(title_words)
-    
-    # Summary keywords
-    summary_words = str(regulation_text).lower().split()
-    keywords.update(summary_words)
-    
-    # Remove common words and short words
-    common_words = {'the', 'a', 'an', 'and', 'or', 'is', 'are', 'be', 'to', 'of', 'in', 'for', 'with', 'by', 'on', 'at', 'this', 'that', 'which', 'who', 'should', 'must', 'shall', 'will', 'can', 'may', 'could', 'would', 'not', 'no', 'yes', 'or', 'it', 'its', 'as', 'from', 'do', 'does', 'did', 'have', 'has', 'had', 'all', 'some', 'any', 'each', 'every', 'both', 'either', 'neither', 'such', 'what', 'when', 'where', 'why', 'how', 'if', 'unless', 'until', 'while', 'during', 'before', 'after', 'above', 'below', 'between', 'through', 'throughout', 'within', 'without', 'about', 'around', 'over', 'under', 'out', 'up', 'down', 'off', 'more', 'less', 'most', 'least', 'many', 'few', 'much', 'little', 'so', 'than', 'are', 'were', 'been', 'being', 'my', 'your', 'his', 'her', 'our', 'their', 'me', 'you', 'him', 'her', 'us', 'them', 'I', 'we', 'they', 'she', 'he', 'that', 'these', 'those', 'ones', 'other', 'another', 'same', 'different', 'new', 'old', 'good', 'bad', 'better', 'worse', 'best', 'worst', 'high', 'low', 'first', 'last', 'next', 'previous', 'only', 'just', 'also', 'even', 'very', 'too', 'so', 'as', 'because', 'since', 'although', 'though', 'however', 'therefore', 'thus', 'hence', 'otherwise', 'moreover', 'furthermore', 'besides', 'instead', 'rather', 'except', 'but', 'yet', 'nor', 'neither'}
-    keywords = {kw for kw in keywords if len(kw) > min_length and kw not in common_words}
-    
-    return keywords
-
-def direct_keyword_match(regulation_text, regulation_title, control_keywords, top_k=15):
-    """Find controls by matching keywords in regulation with control keywords."""
-    
-    # Extract keywords from regulation
-    reg_keywords = extract_regulation_keywords(regulation_text, regulation_title)
-    
-    if not reg_keywords:
-        return set()
-    
-    # Score each control based on keyword overlap
-    control_scores = defaultdict(int)
-    
-    for ctrl_id, ctrl_kw in control_keywords.items():
-        overlap = len(reg_keywords & ctrl_kw)
-        if overlap > 0:
-            control_scores[ctrl_id] = overlap
-    
-    # Get top-K controls
-    sorted_controls = sorted(control_scores.items(), key=lambda x: x[1], reverse=True)
-    top_controls = [ctrl_id for ctrl_id, score in sorted_controls[:top_k]]
-    
-    return set(top_controls)
-
-print("\nApplying direct keyword matching...")
-
-direct_matches = {}
-
-for idx, row in regulatory_df.iterrows():
-    reg_id = row['regulation_id']
-    reg_text = row['regulatory_summary']
-    reg_title = row['regulatory_title']
-    
-    matches = direct_keyword_match(reg_text, reg_title, control_keywords, top_k=15)
-    direct_matches[reg_id] = matches
-    
-    if (idx + 1) % 10 == 0:
-        print(f"  ✓ {idx + 1}/{len(regulatory_df)}")
-
-avg_direct = np.mean([len(v) for v in direct_matches.values()])
-print(f"\n✓ Direct matches found: {avg_direct:.1f} controls/regulation")
-
-# ============================================================================
-# STEP 3: LLM-BASED SEMANTIC DOMAIN EXPANSION
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 3: LLM SEMANTIC DOMAIN EXPANSION (GPT-4o Mini)")
-print("Identifying relevant control domains based on regulation")
-print("="*80)
-
-# Group controls by domain
-domains_to_controls = defaultdict(set)
-for ctrl_id, domain in control_domains.items():
-    domains_to_controls[domain].add(ctrl_id)
-
-# Get unique domains
-unique_domains = list(domains_to_controls.keys())
-print(f"\nTotal unique control domains: {len(unique_domains)}")
-print(f"Sample domains: {unique_domains[:10]}")
-
-def identify_relevant_domains_with_llm(regulation_id, regulation_text, regulation_title, 
-                                       domains_list, direct_controls, control_catalog):
+def map_regulation_to_controls(regulation_id, regulation_title, regulation_text, 
+                               control_batches, control_catalog):
     """
-    Use LLM to identify which domains of controls are relevant to this regulation.
+    Use LLM to map regulation to controls.
+    Process in batches and get top matches.
     """
     
-    # Get controls for direct matches to show LLM the style
-    direct_control_examples = ""
-    for ctrl_id in list(direct_controls)[:3]:
-        if ctrl_id in control_catalog:
-            ctrl_info = control_catalog[ctrl_id]
-            direct_control_examples += f"- {ctrl_id}: {ctrl_info['title']}\n"
+    all_matched_controls = []
     
-    # Create domain list with counts
-    domain_list_str = ""
-    for i, domain in enumerate(domains_list[:50], 1):  # Top 50 domains
-        count = len(domains_to_controls[domain])
-        domain_list_str += f"{i}. {domain} ({count} controls)\n"
-    
-    system_prompt = """You are a compliance expert identifying relevant control domains.
+    for batch_num, batch in enumerate(control_batches):
+        # Create control list for this batch
+        control_list = ""
+        for ctrl_id in batch:
+            control_list += f"- {control_catalog[ctrl_id]}\n"
+        
+        prompt = f"""You are a compliance expert mapping regulatory requirements to security controls.
 
-Your task: Given a regulatory requirement, identify ALL control domains that are relevant.
-
-Approach:
-1. Understand the regulatory requirement deeply
-2. Think about what types of controls would be needed
-3. Identify ALL potentially relevant domains
-4. Be comprehensive - include preventive, detective, and corrective controls
-5. Include supporting and enabling controls
-
-Return: List of relevant domain numbers/names"""
-
-    user_prompt = f"""Regulatory Requirement:
+REGULATORY REQUIREMENT:
 Title: {regulation_title}
 Text: {regulation_text}
 
-Examples of directly matched controls:
-{direct_control_examples}
+AVAILABLE CONTROLS IN THIS BATCH:
+{control_list}
 
-Available Control Domains:
-{domain_list_str}
+TASK:
+1. Identify which controls from this batch are RELEVANT to the regulatory requirement
+2. Be INCLUSIVE - include all controls that could help implement/support this regulation
+3. Include preventive, detective, corrective controls
+4. Include both direct implementations and supporting controls
 
-Which control domains are relevant to this regulation?
-List ALL domains that apply (be comprehensive, not restrictive).
+RETURN FORMAT:
+List only the matching control IDs, one per line. Example:
+L1C-001
+L1C-045
+L1C-102
 
-Return as: Domain names or numbers, one per line."""
+If no controls match, return: NONE"""
 
-    try:
-        response = client.messages.create(
-            model="gpt-4o-mini",
-            max_tokens=800,
-            temperature=0.3,  # Lower temperature for consistency
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
-            system=system_prompt
-        )
+        try:
+            response = client.messages.create(
+                model="gpt-4o-mini",
+                max_tokens=500,
+                temperature=0.3,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            
+            response_text = response.content[0].text.strip()
+            
+            # Parse response
+            for line in response_text.split('\n'):
+                line = line.strip().upper()
+                if line and line != 'NONE' and line in control_ids:
+                    all_matched_controls.append(line)
+            
+            print(f"  Batch {batch_num + 1}/{len(control_batches)}: Found {len([l for l in response_text.split('\n') if l.strip() and l.strip() != 'NONE' and l.strip().upper() in control_ids])} controls")
         
-        response_text = response.content[0].text.strip()
-        
-        # Parse response to extract domain names
-        relevant_domains = set()
-        
-        for line in response_text.split('\n'):
-            line = line.strip().lower()
-            if len(line) > 2:
-                # Remove numbering/bullets
-                line = line.lstrip('0123456789.-) ')
-                
-                # Find matching domains
-                for domain in domains_list:
-                    if domain.lower() in line or line in domain.lower():
-                        relevant_domains.add(domain)
-        
-        return relevant_domains
+        except Exception as e:
+            print(f"  ⚠ Error processing batch {batch_num + 1}: {str(e)}")
     
-    except Exception as e:
-        print(f"  ⚠ LLM domain identification error: {str(e)}")
-        return set()
+    # Remove duplicates and return
+    unique_controls = list(set(all_matched_controls))
+    return unique_controls
 
-print("\nIdentifying relevant control domains with LLM...")
+# ============================================================================
+# MAP ALL REGULATIONS
+# ============================================================================
 
-relevant_domains_dict = {}
+print("\n" + "="*80)
+print("MAPPING REGULATIONS TO CONTROLS")
+print("="*80)
+
+all_mappings = []
 
 for idx, row in regulatory_df.iterrows():
     reg_id = row['regulation_id']
-    reg_text = row['regulatory_summary']
     reg_title = row['regulatory_title']
+    reg_text = row['regulatory_summary']
     
-    direct = direct_matches.get(reg_id, set())
+    print(f"\n[{idx + 1}/{len(regulatory_df)}] Mapping: {reg_id}")
     
-    relevant_domains = identify_relevant_domains_with_llm(
-        reg_id,
+    mapped_controls = map_regulation_to_controls(
+        reg_id, 
+        reg_title, 
         reg_text,
-        reg_title,
-        unique_domains,
-        direct,
+        control_batches,
         control_catalog
     )
     
-    relevant_domains_dict[reg_id] = relevant_domains
-    
-    if (idx + 1) % 5 == 0:
-        print(f"  ✓ {idx + 1}/{len(regulatory_df)}")
-
-print(f"\n✓ Domain identification complete")
-
-# ============================================================================
-# STEP 4: EXPAND CONTROLS FROM RELEVANT DOMAINS
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 4: EXPANDING CONTROLS FROM RELEVANT DOMAINS")
-print("="*80)
-
-def expand_from_domains(relevant_domains, domains_to_controls, direct_controls, top_per_domain=4):
-    """Get controls from relevant domains."""
-    
-    expanded = set(direct_controls)
-    
-    for domain in relevant_domains:
-        if domain in domains_to_controls:
-            domain_controls = list(domains_to_controls[domain])
-            # Add top controls from this domain
-            expanded.update(domain_controls[:top_per_domain])
-    
-    return expanded
-
-print("\nExpanding controls from relevant domains...")
-
-domain_expanded = {}
-
-for reg_id, relevant_domains in relevant_domains_dict.items():
-    direct = direct_matches.get(reg_id, set())
-    expanded = expand_from_domains(relevant_domains, domains_to_controls, direct, top_per_domain=4)
-    domain_expanded[reg_id] = expanded
-
-avg_expanded = np.mean([len(v) for v in domain_expanded.values()])
-print(f"✓ Domain expansion complete: {avg_expanded:.1f} controls/regulation")
-
-# ============================================================================
-# STEP 5: LLM BATCH VALIDATION AND RANKING
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 5: LLM BATCH VALIDATION AND RANKING")
-print("Validating and ranking controls for relevance")
-print("="*80)
-
-def rank_controls_with_llm(regulation_id, regulation_text, regulation_title, 
-                           candidate_controls, control_catalog, target_count=6):
-    """
-    Use LLM to rank candidate controls by relevance and select top ones.
-    """
-    
-    if not candidate_controls:
-        return set()
-    
-    # Prepare control information for LLM
-    control_info = "Candidate Controls:\n"
-    for i, ctrl_id in enumerate(sorted(candidate_controls)[:20], 1):  # Limit to 20 for token efficiency
-        if ctrl_id in control_catalog:
-            title = control_catalog[ctrl_id]['title']
-            desc = control_catalog[ctrl_id]['description'][:100]  # Truncate description
-            control_info += f"{i}. {ctrl_id}: {title}\n"
-    
-    system_prompt = """You are a compliance expert ranking controls by relevance.
-
-Your task: Rank controls by how relevant they are to the regulation.
-
-Criteria:
-- Direct relevance to regulatory requirement
-- Importance for compliance
-- Practicality and implementation
-- Coverage of key regulatory aspects
-
-Return: Top 6 control IDs in order of relevance"""
-
-    user_prompt = f"""Regulatory Requirement:
-Title: {regulation_title}
-Text: {regulation_text}
-
-{control_info}
-
-Rank the top {target_count} most relevant controls (most relevant first).
-Return only control IDs, one per line."""
-
-    try:
-        response = client.messages.create(
-            model="gpt-4o-mini",
-            max_tokens=300,
-            temperature=0.2,
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
-            system=system_prompt
-        )
-        
-        response_text = response.content[0].text.strip()
-        
-        # Parse response to extract control IDs
-        ranked_controls = []
-        
-        for line in response_text.split('\n'):
-            line = line.strip()
-            # Extract control ID (usually first token)
-            ctrl_id = line.split()[0].upper() if line else None
-            
-            if ctrl_id and ctrl_id in candidate_controls:
-                ranked_controls.append(ctrl_id)
-        
-        # Return top controls
-        return set(ranked_controls[:target_count])
-    
-    except Exception as e:
-        print(f"  ⚠ LLM ranking error: {str(e)}")
-        # Fallback: return first N controls
-        return set(list(candidate_controls)[:target_count])
-
-print("\nRanking controls with LLM...")
-
-llm_ranked = {}
-
-for idx, row in regulatory_df.iterrows():
-    reg_id = row['regulation_id']
-    reg_text = row['regulatory_summary']
-    reg_title = row['regulatory_title']
-    
-    candidates = domain_expanded.get(reg_id, set())
-    
-    ranked = rank_controls_with_llm(
-        reg_id,
-        reg_text,
-        reg_title,
-        candidates,
-        control_catalog,
-        target_count=6
-    )
-    
-    llm_ranked[reg_id] = ranked
-    
-    if (idx + 1) % 5 == 0:
-        print(f"  ✓ {idx + 1}/{len(regulatory_df)}")
-
-avg_ranked = np.mean([len(v) for v in llm_ranked.values()])
-print(f"\n✓ LLM ranking complete: {avg_ranked:.1f} controls/regulation")
-
-# ============================================================================
-# STEP 6: CONFIDENCE SCORING FOR CONTROLS
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 6: CONFIDENCE SCORING")
-print("Scoring confidence in control selection")
-print("="*80)
-
-def calculate_control_confidence(control_id, regulation_text, regulation_title, 
-                                control_catalog, direct_matched, domain_matched, llm_ranked):
-    """
-    Calculate confidence score for a control based on multiple signals.
-    """
-    
-    score = 0.0
-    
-    # Factor 1: Was it in direct keyword matches? (0.3 weight)
-    if control_id in direct_matched:
-        score += 0.3
-    
-    # Factor 2: Was it in domain matches? (0.3 weight)
-    if control_id in domain_matched:
-        score += 0.3
-    
-    # Factor 3: Was it in LLM ranking? (0.4 weight)
-    if control_id in llm_ranked:
-        score += 0.4
-    
-    # Normalize to 0-1 scale
-    confidence = min(score, 1.0)
-    
-    return confidence
-
-print("\nCalculating confidence scores...")
-
-confidence_scores = {}
-
-for idx, row in regulatory_df.iterrows():
-    reg_id = row['regulation_id']
-    reg_text = row['regulatory_summary']
-    reg_title = row['regulatory_title']
-    
-    all_controls = llm_ranked.get(reg_id, set())
-    direct = direct_matches.get(reg_id, set())
-    domain = domain_expanded.get(reg_id, set())
-    ranked = llm_ranked.get(reg_id, set())
-    
-    scores = {}
-    for ctrl_id in all_controls:
-        conf = calculate_control_confidence(
-            ctrl_id, reg_text, reg_title, control_catalog,
-            direct, domain, ranked
-        )
-        scores[ctrl_id] = conf
-    
-    confidence_scores[reg_id] = scores
-
-print(f"✓ Confidence scoring complete")
-
-# ============================================================================
-# STEP 7: FINAL FILTERING AND SELECTION
-# ============================================================================
-
-print("\n" + "="*80)
-print("STEP 7: FINAL SELECTION WITH CONFIDENCE FILTERING")
-print("="*80)
-
-def final_selection(control_set, confidence_scores, max_controls=8, min_confidence=0.0):
-    """
-    Final selection: Keep controls sorted by confidence.
-    """
-    
-    if not control_set:
-        return set()
-    
-    # Sort by confidence
-    sorted_controls = sorted(
-        control_set,
-        key=lambda x: confidence_scores.get(x, 0.0),
-        reverse=True
-    )
-    
-    # Keep top controls with minimum confidence
-    selected = []
-    for ctrl_id in sorted_controls:
-        if len(selected) >= max_controls:
-            break
-        if confidence_scores.get(ctrl_id, 0.0) >= min_confidence:
-            selected.append(ctrl_id)
-    
-    # If not enough controls, add more regardless of confidence
-    if len(selected) < max_controls:
-        for ctrl_id in sorted_controls:
-            if ctrl_id not in selected:
-                selected.append(ctrl_id)
-                if len(selected) >= max_controls:
-                    break
-    
-    return set(selected)
-
-print("\nApplying final selection...")
-
-final_mappings = {}
-
-for reg_id, ranked_controls in llm_ranked.items():
-    scores = confidence_scores.get(reg_id, {})
-    final = final_selection(ranked_controls, scores, max_controls=8, min_confidence=0.0)
-    final_mappings[reg_id] = final
-
-# ============================================================================
-# RESULTS & ANALYSIS
-# ============================================================================
-
-print("\n" + "="*80)
-print("FINAL RESULTS")
-print("="*80)
-
-# Calculate statistics
-stage_statistics = {
-    'Direct Keyword Matching': np.mean([len(v) for v in direct_matches.values()]),
-    'After Domain Expansion': np.mean([len(v) for v in domain_expanded.values()]),
-    'After LLM Ranking': np.mean([len(v) for v in llm_ranked.values()]),
-    'Final Selection': np.mean([len(v) for v in final_mappings.values()])
-}
-
-print(f"\nControls per Regulation by Stage:")
-for stage, count in stage_statistics.items():
-    print(f"  {stage}: {count:.1f}")
-
-# Confidence distribution
-all_confidence_values = []
-for scores in confidence_scores.values():
-    all_confidence_values.extend(scores.values())
-
-print(f"\nConfidence Score Statistics:")
-print(f"  Average: {np.mean(all_confidence_values):.2f}")
-print(f"  Min: {np.min(all_confidence_values):.2f}")
-print(f"  Max: {np.max(all_confidence_values):.2f}")
-print(f"  Median: {np.median(all_confidence_values):.2f}")
-
-confidence_distribution = {
-    '0.7-1.0 (High)': sum(1 for c in all_confidence_values if 0.7 <= c <= 1.0),
-    '0.4-0.7 (Medium)': sum(1 for c in all_confidence_values if 0.4 <= c < 0.7),
-    '0.0-0.4 (Low)': sum(1 for c in all_confidence_values if c < 0.4)
-}
-
-print(f"\nConfidence Distribution:")
-for level, count in confidence_distribution.items():
-    pct = count / len(all_confidence_values) * 100
-    print(f"  {level}: {count} ({pct:.1f}%)")
-
-# ============================================================================
-# SAVE RESULTS
-# ============================================================================
-
-print("\n" + "="*80)
-print("SAVING RESULTS")
-print("="*80)
-
-# Create output dataframe
-output_data = []
-
-for idx, row in regulatory_df.iterrows():
-    reg_id = row['regulation_id']
-    reg_title = row['regulatory_title']
-    reg_text = row['regulatory_summary']
-    
-    final_controls = final_mappings.get(reg_id, set())
-    control_confidences = confidence_scores.get(reg_id, {})
-    
-    # Create control list with confidences
-    control_details = []
-    for ctrl_id in sorted(final_controls):
-        conf = control_confidences.get(ctrl_id, 0.0)
-        control_details.append(f"{ctrl_id}({conf:.2f})")
-    
-    output_data.append({
+    all_mappings.append({
         'regulation_id': reg_id,
         'regulation_title': reg_title,
-        'regulation_text': reg_text[:200],  # Truncate for readability
-        'mapped_control_ids': ','.join(sorted(final_controls)),
-        'control_with_confidence': '|'.join(control_details),
-        'control_count': len(final_controls),
-        'avg_confidence': np.mean(list(control_confidences.values())) if control_confidences else 0.0
+        'regulation_text': reg_text[:150],
+        'mapped_control_ids': ','.join(sorted(mapped_controls)),
+        'control_count': len(mapped_controls)
     })
+    
+    print(f"  ✓ Mapped {len(mapped_controls)} controls")
 
-output_df = pd.DataFrame(output_data)
-output_df.to_csv('regulatory_control_mapping_final.csv', index=False)
-
-print("✓ Saved: regulatory_control_mapping_final.csv")
-
-# Create summary report
-summary_report = f"""
-REGULATORY CONTROL MAPPING - SUMMARY REPORT
-=============================================
-
-Mapping Summary:
-  Total Regulations Mapped: {len(final_mappings)}
-  Total Unique Controls Used: {len(set().union(*final_mappings.values()))}
-  Avg Controls per Regulation: {np.mean([len(v) for v in final_mappings.values()]):.2f}
-  Min/Max per Regulation: {min(len(v) for v in final_mappings.values())} / {max(len(v) for v in final_mappings.values())}
-
-Process Stages:
-  1. Direct Keyword Matching: {stage_statistics['Direct Keyword Matching']:.1f} controls/reg
-  2. Domain Expansion: {stage_statistics['After Domain Expansion']:.1f} controls/reg
-  3. LLM Ranking: {stage_statistics['After LLM Ranking']:.1f} controls/reg
-  4. Final Selection: {stage_statistics['Final Selection']:.1f} controls/reg
-
-Quality Metrics:
-  Average Confidence Score: {np.mean(all_confidence_values):.2f}
-  High Confidence (0.7+): {confidence_distribution['0.7-1.0 (High)']} controls
-  Medium Confidence (0.4-0.7): {confidence_distribution['0.4-0.7 (Medium)']} controls
-  Low Confidence (<0.4): {confidence_distribution['0.0-0.4 (Low)']} controls
-
-Coverage Achievement:
-  Started with ~3 controls per regulation (estimate)
-  Now mapping ~{stage_statistics['Final Selection']:.1f} controls per regulation
-  Increase: {stage_statistics['Final Selection'] - 3:.1f} additional controls/regulation
-
-Files Generated:
-  - regulatory_control_mapping_final.csv: Final mappings with confidences
-"""
-
-print(summary_report)
-
-with open('mapping_summary_report.txt', 'w') as f:
-    f.write(summary_report)
-
-print("✓ Saved: mapping_summary_report.txt")
+# ============================================================================
+# RESULTS
+# ============================================================================
 
 print("\n" + "="*80)
-print("MAPPING COMPLETE - NO GOLDEN SOURCE USED")
+print("MAPPING RESULTS")
+print("="*80)
+
+output_df = pd.DataFrame(all_mappings)
+
+print(f"\nSummary:")
+print(f"  Total Regulations: {len(output_df)}")
+print(f"  Avg Controls per Regulation: {output_df['control_count'].mean():.1f}")
+print(f"  Min/Max: {output_df['control_count'].min()} / {output_df['control_count'].max()}")
+
+print(f"\nControl Count Distribution:")
+print(output_df['control_count'].describe())
+
+# Save results
+output_df.to_csv('regulatory_control_mapping_final.csv', index=False)
+print("\n✓ Saved: regulatory_control_mapping_final.csv")
+
+print("\n" + "="*80)
+print("MAPPING COMPLETE")
 print("="*80)
