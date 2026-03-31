@@ -183,3 +183,284 @@ print("\n✓ Saved: regulatory_control_mapping_final.csv")
 print("\n" + "="*80)
 print("MAPPING COMPLETE")
 print("="*80)
+
+
+
+
+***_*_*_*__*_*_*_*_*_*_*_*_*_*_*__*_**_*_*
+
+import pandas as pd
+import numpy as np
+from openai import OpenAI
+from collections import defaultdict
+
+# Initialize OpenAI client
+client = OpenAI(api_key="your-openai-api-key")
+
+print("="*80)
+print("REGULATORY TEXT TO CONTROL MAPPING - SIMPLIFIED")
+print("Using GPT-4o Mini with Ranking to Select Top 10")
+print("="*80)
+
+# ============================================================================
+# LOAD DATA
+# ============================================================================
+
+print("\nLoading data...")
+
+regulatory_df = pd.read_csv('regulatory_texts.csv')
+controls_df = pd.read_csv('controls_catalog.csv')
+
+print(f"  Regulatory Texts: {len(regulatory_df)}")
+print(f"  Control Catalog: {len(controls_df)} controls")
+
+# Build control catalog
+control_catalog = {}
+for _, row in controls_df.iterrows():
+    ctrl_id = row['control_id']
+    title = row['control_title']
+    desc = row['control_description']
+    control_catalog[ctrl_id] = f"{ctrl_id}: {title}"
+
+print(f"✓ Control catalog built: {len(control_catalog)} controls")
+
+# ============================================================================
+# BATCH CONTROLS FOR LLM (Send in batches of 100)
+# ============================================================================
+
+print("\n" + "="*80)
+print("Preparing control batches for LLM processing...")
+print("="*80)
+
+control_ids = list(control_catalog.keys())
+batch_size = 100
+
+control_batches = []
+for i in range(0, len(control_ids), batch_size):
+    batch = control_ids[i:i+batch_size]
+    control_batches.append(batch)
+
+print(f"✓ Created {len(control_batches)} batches of {batch_size} controls each")
+
+# ============================================================================
+# STEP 1: GET ALL CANDIDATE CONTROLS
+# ============================================================================
+
+def get_candidate_controls(regulation_id, regulation_title, regulation_text, 
+                          control_batches, control_catalog):
+    """
+    Get all candidate controls that match the regulation.
+    """
+    
+    all_matched_controls = []
+    
+    for batch_num, batch in enumerate(control_batches):
+        # Create control list for this batch
+        control_list = ""
+        for ctrl_id in batch:
+            control_list += f"- {control_catalog[ctrl_id]}\n"
+        
+        prompt = f"""You are a compliance expert. 
+
+REGULATORY REQUIREMENT:
+Title: {regulation_title}
+Text: {regulation_text}
+
+AVAILABLE CONTROLS IN THIS BATCH:
+{control_list}
+
+Identify ALL controls that are relevant to this regulation.
+
+RETURN ONLY control IDs, one per line:"""
+
+        try:
+            response = client.messages.create(
+                model="gpt-4o-mini",
+                max_tokens=300,
+                temperature=0.3,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            
+            response_text = response.content[0].text.strip()
+            
+            # Parse response
+            for line in response_text.split('\n'):
+                line = line.strip().upper()
+                if line and line in control_ids:
+                    all_matched_controls.append(line)
+        
+        except Exception as e:
+            print(f"  ⚠ Error in batch {batch_num + 1}: {str(e)}")
+    
+    return list(set(all_matched_controls))
+
+# ============================================================================
+# STEP 2: RANK AND SELECT TOP 10
+# ============================================================================
+
+def rank_and_select_top_controls(regulation_title, regulation_text, 
+                                candidate_controls, control_catalog, top_k=10):
+    """
+    Use LLM to rank candidate controls and select top 10.
+    """
+    
+    if not candidate_controls:
+        return []
+    
+    if len(candidate_controls) <= top_k:
+        return candidate_controls
+    
+    # Create list of candidates
+    candidate_list = ""
+    for i, ctrl_id in enumerate(sorted(candidate_controls)[:50], 1):  # Show top 50 for ranking
+        candidate_list += f"{i}. {control_catalog[ctrl_id]}\n"
+    
+    prompt = f"""You are a compliance expert ranking security controls.
+
+REGULATORY REQUIREMENT:
+Title: {regulation_title}
+Text: {regulation_text}
+
+CANDIDATE CONTROLS (in no particular order):
+{candidate_list}
+
+TASK: Rank these controls by IMPORTANCE to this regulation.
+Select the TOP {top_k} MOST IMPORTANT controls.
+
+Return ONLY the {top_k} control IDs in order of importance (most important first):"""
+
+    try:
+        response = client.messages.create(
+            model="gpt-4o-mini",
+            max_tokens=300,
+            temperature=0.1,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+        
+        response_text = response.content[0].text.strip()
+        
+        # Parse response and extract top controls
+        ranked_controls = []
+        for line in response_text.split('\n'):
+            line = line.strip().upper()
+            if line:
+                # Extract control ID (first token)
+                ctrl_id = line.split()[0] if line else None
+                if ctrl_id and ctrl_id in candidate_controls:
+                    ranked_controls.append(ctrl_id)
+                    if len(ranked_controls) >= top_k:
+                        break
+        
+        return ranked_controls[:top_k]
+    
+    except Exception as e:
+        print(f"  ⚠ Error ranking controls: {str(e)}")
+        return candidate_controls[:top_k]
+
+# ============================================================================
+# MAP ALL REGULATIONS
+# ============================================================================
+
+print("\n" + "="*80)
+print("MAPPING REGULATIONS TO CONTROLS")
+print("Step 1: Get all candidates")
+print("Step 2: Rank and select top 10")
+print("="*80)
+
+all_mappings = []
+
+for idx, row in regulatory_df.iterrows():
+    reg_id = row['regulation_id']
+    reg_title = row['regulatory_title']
+    reg_text = row['regulatory_summary']
+    
+    print(f"\n[{idx + 1}/{len(regulatory_df)}] {reg_id}")
+    
+    # Step 1: Get candidates
+    print(f"  Step 1: Finding candidates...")
+    candidates = get_candidate_controls(
+        reg_id, 
+        reg_title, 
+        reg_text,
+        control_batches,
+        control_catalog
+    )
+    print(f"    → Found {len(candidates)} candidate controls")
+    
+    # Step 2: Rank and select top 10
+    print(f"  Step 2: Ranking and selecting top 10...")
+    if len(candidates) > 10:
+        final_controls = rank_and_select_top_controls(
+            reg_title,
+            reg_text,
+            candidates,
+            control_catalog,
+            top_k=10
+        )
+    else:
+        final_controls = candidates
+    
+    print(f"    → Selected {len(final_controls)} controls")
+    
+    all_mappings.append({
+        'regulation_id': reg_id,
+        'regulation_title': reg_title,
+        'regulation_text': reg_text[:150],
+        'total_candidates': len(candidates),
+        'mapped_control_ids': ','.join(sorted(final_controls)),
+        'control_count': len(final_controls)
+    })
+
+# ============================================================================
+# RESULTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("MAPPING RESULTS")
+print("="*80)
+
+output_df = pd.DataFrame(all_mappings)
+
+print(f"\nSummary:")
+print(f"  Total Regulations: {len(output_df)}")
+print(f"  Avg Candidates Found: {output_df['total_candidates'].mean():.1f}")
+print(f"  Avg Controls Selected: {output_df['control_count'].mean():.1f}")
+print(f"  Max Controls: {output_df['control_count'].max()}")
+print(f"  Min Controls: {output_df['control_count'].min()}")
+
+print(f"\nControl Count Distribution:")
+print(output_df['control_count'].value_counts().sort_index())
+
+print(f"\nTotal Unique Controls Used: {len(set(','.join(output_df['mapped_control_ids']).split(',')))}")
+
+# Save results
+output_df.to_csv('regulatory_control_mapping_final.csv', index=False)
+print("\n✓ Saved: regulatory_control_mapping_final.csv")
+
+# Show sample mappings
+print("\n" + "="*80)
+print("SAMPLE MAPPINGS")
+print("="*80)
+
+for i in range(min(3, len(output_df))):
+    row = output_df.iloc[i]
+    print(f"\n{i+1}. {row['regulation_id']}")
+    print(f"   Title: {row['regulation_title']}")
+    print(f"   Candidates: {row['total_candidates']} → Selected: {row['control_count']}")
+    controls = row['mapped_control_ids'].split(',')
+    for ctrl_id in controls:
+        print(f"     - {ctrl_id}: {control_catalog[ctrl_id].split(': ')[1]}")
+
+print("\n" + "="*80)
+print("MAPPING COMPLETE")
+print("="*80)
