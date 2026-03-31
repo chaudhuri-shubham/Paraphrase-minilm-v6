@@ -1,3 +1,141 @@
+def map_regulation_with_confidence(regulation_id, regulation_title, regulation_text, 
+                                   control_batches, control_catalog, top_k=10):
+    """
+    Single LLM function that:
+    1. Identifies matching controls
+    2. Assigns confidence scores
+    3. Returns top 10 by confidence
+    """
+    
+    all_controls_with_scores = {}
+    
+    for batch_num, batch in enumerate(control_batches):
+        # Create control list for this batch
+        control_list = ""
+        for ctrl_id in batch:
+            control_list += f"- {control_catalog[ctrl_id]}\n"
+        
+        prompt = f"""You are a compliance expert analyzing regulatory requirements.
+
+REGULATORY REQUIREMENT:
+Title: {regulation_title}
+Text: {regulation_text}
+
+AVAILABLE CONTROLS IN THIS BATCH:
+{control_list}
+
+TASK:
+For each control in this batch, rate its relevance to the regulatory requirement:
+- Score 1-10 where 10 = ESSENTIAL (must have)
+- Score 7-9 = HIGHLY RELEVANT (strongly recommended)
+- Score 4-6 = RELEVANT (somewhat related)
+- Score 1-3 = MINOR (loosely related)
+
+IMPORTANT: Only include controls with score >= 4
+
+RETURN FORMAT (only controls with score 4+):
+L1C-001:8
+L1C-045:7
+L1C-102:5
+
+If no controls score 4+, return: NONE"""
+
+        try:
+            response = client.messages.create(
+                model="gpt-4o-mini",
+                max_tokens=500,
+                temperature=0.2,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            
+            response_text = response.content[0].text.strip()
+            
+            # Parse response: extract control:score pairs
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if ':' in line and line != 'NONE':
+                    parts = line.split(':')
+                    if len(parts) == 2:
+                        ctrl_id = parts[0].strip().upper()
+                        try:
+                            score = float(parts[1].strip())
+                            if ctrl_id in control_ids and 4 <= score <= 10:
+                                all_controls_with_scores[ctrl_id] = score
+                        except ValueError:
+                            pass
+            
+            print(f"  Batch {batch_num + 1}/{len(control_batches)}: Found {len([s for s in all_controls_with_scores.values() if s >= 4])} controls")
+        
+        except Exception as e:
+            print(f"  ⚠ Error processing batch {batch_num + 1}: {str(e)}")
+    
+    # Sort by confidence score and select top K
+    if not all_controls_with_scores:
+        return [], {}
+    
+    sorted_controls = sorted(all_controls_with_scores.items(), key=lambda x: x[1], reverse=True)
+    top_controls = sorted_controls[:top_k]
+    
+    final_controls = [ctrl_id for ctrl_id, score in top_controls]
+    final_scores = {ctrl_id: score for ctrl_id, score in top_controls}
+    
+    return final_controls, final_scores
+
+# ============================================================================
+# MAP ALL REGULATIONS
+# ============================================================================
+
+print("\n" + "="*80)
+print("MAPPING REGULATIONS TO CONTROLS WITH CONFIDENCE SCORING")
+print("="*80)
+
+all_mappings = []
+
+for idx, row in regulatory_df.iterrows():
+    reg_id = row['regulation_id']
+    reg_title = row['regulatory_title']
+    reg_text = row['regulatory_summary']
+    
+    print(f"\n[{idx + 1}/{len(regulatory_df)}] {reg_id}")
+    
+    # Single LLM call with confidence scoring
+    final_controls, confidence_scores = map_regulation_with_confidence(
+        reg_id, 
+        reg_title, 
+        reg_text,
+        control_batches,
+        control_catalog,
+        top_k=10
+    )
+    
+    # Create control list with scores
+    control_details = []
+    for ctrl_id in final_controls:
+        score = confidence_scores.get(ctrl_id, 0)
+        control_details.append(f"{ctrl_id}({score:.1f})")
+    
+    all_mappings.append({
+        'regulation_id': reg_id,
+        'regulation_title': reg_title,
+        'regulation_text': reg_text[:150],
+        'mapped_control_ids': ','.join(final_controls),
+        'controls_with_scores': '|'.join(control_details),
+        'control_count': len(final_controls),
+        'avg_confidence': np.mean(list(confidence_scores.values())) if confidence_scores else 0
+    })
+    
+    print(f"  ✓ Selected {len(final_controls)} controls")
+    if final_controls:
+        print(f"    Avg Confidence: {np.mean(list(confidence_scores.values())):.1f}/10")
+
+
+***_____*_*_*______*_*______*____*_____
+
 import pandas as pd
 import numpy as np
 from openai import OpenAI
