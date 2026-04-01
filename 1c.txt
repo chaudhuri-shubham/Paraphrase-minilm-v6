@@ -1,4 +1,102 @@
 import pandas as pd
+from sentence_transformers import SentenceTransformer, util
+from openai import OpenAI
+
+# Initialize clients
+client = OpenAI(api_key="YOUR_OPENAI_API_KEY")
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_llm_response(prompt):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a GRC expert. Your goal is high-recall mapping."},
+                  {"role": "user", "content": prompt}],
+        temperature=0.1
+    )
+    return response.choices[0].message.content
+
+# --- STEP 1: Intent Expansion (LLM) ---
+def expand_regulation(reg_id, reg_title, reg_desc):
+    """Breaks a single regulation into 6 searchable intents for broader coverage."""
+    prompt = f"""
+    Regulation ID: {reg_id}
+    Title: {reg_title}
+    Description: {reg_desc}
+
+    Identify 6 distinct security/compliance requirements mentioned or implied above. 
+    Each should be a short, technical search query (e.g., 'Encryption at rest' or 'MFA for admins').
+    Return only the queries, one per line.
+    """
+    queries = get_llm_response(prompt).strip().split('\n')
+    # Clean up any potential numbering from LLM
+    return [q.strip("- 123456. ") for q in queries if q.strip()]
+
+# --- STEP 2 & 3: Retrieval and Mapping Selection ---
+def map_regulations_to_controls(reg_df, control_df):
+    # Prepare Control Embeddings
+    print(f"Embedding {len(control_df)} controls...")
+    control_df['full_text'] = control_df['id'] + ": " + control_df['title'] + " " + control_df['description']
+    control_embeddings = embed_model.encode(control_df['full_text'].tolist(), convert_to_tensor=True)
+    
+    mapping_results = []
+
+    for _, reg in reg_df.iterrows():
+        reg_id = reg['id']
+        print(f"Mapping Regulation ID: {reg_id}...")
+
+        # 1. EXPAND: Get multiple intents
+        queries = expand_regulation(reg_id, reg['title'], reg['description'])
+        
+        # 2. RETRIEVE: Find candidates using vector search
+        candidate_indices = set()
+        for q in queries:
+            q_emb = embed_model.encode(q, convert_to_tensor=True)
+            # Fetch Top 15 per query to ensure high coverage
+            hits = util.semantic_search(q_emb, control_embeddings, top_k=15)[0]
+            for h in hits:
+                candidate_indices.add(h['corpus_id'])
+        
+        candidates = control_df.iloc[list(candidate_indices)]
+        
+        # 3. SELECT: Final LLM filter for high recall
+        # We format the list so the LLM explicitly sees the IDs
+        candidate_context = ""
+        for _, c in candidates.iterrows():
+            candidate_context += f"CONTROL_ID: {c['id']} | TITLE: {c['title']} | DESC: {c['description'][:200]}\n"
+
+        selection_prompt = f"""
+        REGULATION_ID: {reg_id}
+        REGULATION_TEXT: {reg['description']}
+
+        CANDIDATE CONTROLS:
+        {candidate_context}
+
+        TASK:
+        From the list above, select ALL Control IDs that address any part of this regulation.
+        - Prioritize COVERAGE: if it's a partial match, include it.
+        - Return ONLY a comma-separated list of the Control IDs.
+        - If no controls match, return 'NONE'.
+        """
+        
+        selected_ids_str = get_llm_response(selection_prompt)
+        
+        # Store result for this specific Regulation ID
+        mapping_results.append({
+            "regulation_id": reg_id,
+            "mapped_control_ids": selected_ids_str
+        })
+
+    return pd.DataFrame(mapping_results)
+
+# --- Usage Example ---
+# Assuming your DataFrames are named: control_df and regulation_summary_df
+# final_mapping = map_regulations_to_controls(regulation_summary_df, control_df)
+# final_mapping.to_csv("regulatory_mapping_output.csv", index=False)
+
+
+**"""("("(("("("("""("($)$$($($($)$))$)$)$)$)$)$
+
+import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
 import openai
