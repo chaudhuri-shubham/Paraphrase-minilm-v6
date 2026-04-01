@@ -1,0 +1,95 @@
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from openai import OpenAI
+
+# 1. Initialize OpenAI Client
+client = OpenAI(api_key="YOUR_OPENAI_API_KEY")
+
+def get_llm_selection(reg_row, candidate_df):
+    """
+    The reasoning layer: LLM reviews the shortlist and picks every relevant control.
+    """
+    # Format candidates for the prompt with IDs for mapping integrity
+    candidate_context = ""
+    for _, row in candidate_df.iterrows():
+        candidate_context += f"CONTROL_ID: {row['id']} | TITLE: {row['title']} | DESC: {row['description'][:300]}\n---\n"
+
+    selection_prompt = f"""
+    ### ROLE: Senior GRC & Compliance Architect
+    ### OBJECTIVE: MAXIMUM RECALL MAPPING
+    You are mapping a specific Regulation to a shortlist of potential Controls.
+    
+    **MAPPING GOAL:**
+    Identify EVERY Control ID that provides coverage, mitigation, or administrative support for this regulation. 
+    We prefer a "Soft Match" (False Positive) over missing a valid mapping.
+
+    ---
+    SOURCE REGULATION:
+    REG_ID: {reg_row['id']}
+    TITLE: {reg_row['title']}
+    DESCRIPTION: {reg_row['description']}
+    ---
+    CANDIDATE CONTROLS (Shortlisted via Vector Similarity):
+    {candidate_context}
+    ---
+    ### INSTRUCTIONS:
+    1. Select a control if it addresses the regulation DIRECTLY.
+    2. Select a control if it is COMPENSATORY (e.g., logging that supports an encryption requirement).
+    3. Select a control if it is an ADMINISTRATIVE requirement (e.g., policy/training).
+    
+    OUTPUT: Return ONLY a comma-separated list of the Control IDs. Do not include any text, reasoning, or markdown.
+    If no matches exist, return 'NONE'.
+    
+    Example Output: CTRL_101, CTRL_502, CTRL_991
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a professional GRC mapping engine."},
+                  {"role": "user", "content": selection_prompt}],
+        temperature=0.0  # Absolute consistency
+    )
+    
+    return response.choices[0].message.content
+
+def run_mapping_pipeline(reg_df, control_df, reg_embeddings, control_embeddings, top_k=100):
+    """
+    reg_df: [id, title, description]
+    control_df: [id, title, description]
+    reg_embeddings: numpy array of your pre-computed regulation vectors
+    control_embeddings: numpy array of your pre-computed control vectors
+    """
+    results = []
+
+    # Calculate similarity matrix for all pairs at once for speed
+    # Resulting shape: [num_regulations, 1600]
+    similarities = cosine_similarity(reg_embeddings, control_embeddings)
+
+    for i, (idx, reg) in enumerate(reg_df.iterrows()):
+        reg_id = reg['id']
+        print(f"Processing Regulation {reg_id}...")
+
+        # STEP 1: RETRIEVAL (Vector Similarity)
+        # Get the indices of the top_k most similar controls
+        # We use a large K (100) to ensure high recall
+        top_indices = np.argsort(similarities[i])[::-1][:top_k]
+        candidates = control_df.iloc[top_indices]
+
+        # STEP 2: SELECTION (LLM Reasoning)
+        # The LLM filters the 100 candidates down to the relevant subset
+        mapped_ids = get_llm_selection(reg, candidates)
+
+        results.append({
+            "regulation_id": reg_id,
+            "mapped_control_ids": mapped_ids
+        })
+
+    return pd.DataFrame(results)
+
+# --- EXECUTION ---
+# Ensure your embeddings are numpy arrays
+# reg_emb_np = np.array(your_reg_embeddings)
+# ctrl_emb_np = np.array(your_ctrl_embeddings)
+
+# final_mapping_df = run_mapping_pipeline(regulation_summary_df, control_df, reg_emb_np, ctrl_emb_np)
