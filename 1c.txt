@@ -1,3 +1,89 @@
+import pandas as pd
+import numpy as np
+from sentence_transformers import SentenceTransformer, util
+import openai
+
+# --- 1. Setup & Data Preparation ---
+model = SentenceTransformer('all-MiniLM-L6-v2') # Fast and effective
+
+# Combine Title + Description for better search context
+control_df['full_text'] = control_df['title'] + ": " + control_df['description']
+control_embeddings = model.encode(control_df['full_text'].tolist(), convert_to_tensor=True)
+
+def get_llm_response(prompt):
+    # Placeholder for your LLM call (GPT-4o or similar recommended)
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2 
+    )
+    return response.choices[0].message.content
+
+# --- Step 1: LLM-Based Query Expansion ---
+def expand_regulation(reg_title, reg_desc):
+    prompt = f"""
+    Regulation Title: {reg_title}
+    Description: {reg_desc}
+    
+    Break this regulation down into 5 specific technical search queries. 
+    Each query should focus on a different security or compliance aspect 
+    mentioned or implied in the text.
+    Return only the queries, one per line.
+    """
+    queries = get_llm_response(prompt).strip().split('\n')
+    return [q.strip("- ") for q in queries]
+
+# --- Step 2 & 3: Retrieval and Mapping ---
+def map_regulation_to_controls(reg_row):
+    # 1. Expand (The "First Part" using LLM)
+    search_queries = expand_regulation(reg_row['title'], reg_row['description'])
+    
+    # 2. Vector Retrieval (Broad Recall)
+    candidate_indices = set()
+    for query in search_queries:
+        query_emb = model.encode(query, convert_to_tensor=True)
+        # Pull top 15 per query to ensure high coverage
+        hits = util.semantic_search(query_emb, control_embeddings, top_k=15)[0]
+        for h in hits:
+            candidate_indices.add(h['corpus_id'])
+    
+    # Get the unique candidates
+    candidates = control_df.iloc[list(candidate_indices)]
+    candidate_list_str = "\n".join([f"ID {row['id']}: {row['title']}" for _, row in candidates.iterrows()])
+
+    # 3. Final Selection (LLM)
+    selection_prompt = f"""
+    Regulatory Requirement: {reg_row['description']}
+    
+    Select ALL applicable Control IDs from the list below. 
+    Be inclusive—if a control is related, include it to ensure full coverage.
+    
+    CANDIDATE CONTROLS:
+    {candidate_list_str}
+    
+    Return the result as a comma-separated list of IDs only.
+    """
+    selected_ids = get_llm_response(selection_prompt)
+    return selected_ids
+
+# --- Execution ---
+# You can wrap this in a loop for your regulation_summary_df
+results = []
+for _, reg_row in regulation_summary_df.iterrows():
+    mapping = map_regulation_to_controls(reg_row)
+    results.append({'reg_id': reg_row['id'], 'mapped_control_ids': mapping})
+
+final_mapping_df = pd.DataFrame(results)
+
+
+
+
+
+
+
+****"""""***"""""******"""""_""___$$$$$#****"**
+
+
 def map_regulation_with_confidence(regulation_id, regulation_title, regulation_text, 
                                    control_batches, control_catalog, top_k=10):
     """
