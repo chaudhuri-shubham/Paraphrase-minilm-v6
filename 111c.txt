@@ -1,0 +1,293 @@
+# ── INSTALL ──────────────────────────────────────────────────────────────────
+# !pip install openai pandas openpyxl -q
+
+import os, json, time, pandas as pd
+from openai import OpenAI
+from collections import defaultdict
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG — edit these before running
+# ══════════════════════════════════════════════════════════════════════════════
+API_KEY       = "sk-..."                  # your OpenAI API key
+REG_FILE      = "regulatory_texts.xlsx"  # required cols: reg_id, reg_text
+CONTROLS_FILE = "controls.xlsx"          # required cols: control_id, control_title, control_desc
+GOLDEN_FILE   = "golden_source.xlsx"     # required cols: reg_id, control_id  (validation only)
+MIN_CONF      = 4                        # minimum confidence to keep a match (0-10)
+BATCH_SIZE    = 80                       # controls per API call
+MODEL         = "gpt-4o-mini"
+
+client = OpenAI(api_key=API_KEY)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOAD FILES
+# ══════════════════════════════════════════════════════════════════════════════
+def load(path):
+    return pd.read_excel(path) if path.endswith(('.xlsx', '.xls')) else pd.read_csv(path)
+
+print("Loading files...")
+reg_df      = load(REG_FILE)
+ctrl_df     = load(CONTROLS_FILE)
+golden_df   = load(GOLDEN_FILE)
+
+# Cast IDs to string to avoid int/str mismatch issues
+reg_df["reg_id"]       = reg_df["reg_id"].astype(str)
+ctrl_df["control_id"]  = ctrl_df["control_id"].astype(str)
+golden_df["reg_id"]    = golden_df["reg_id"].astype(str)
+golden_df["control_id"]= golden_df["control_id"].astype(str)
+
+controls = ctrl_df.to_dict("records")
+batches  = [controls[i:i+BATCH_SIZE] for i in range(0, len(controls), BATCH_SIZE)]
+
+print(f"  ✅ {len(reg_df)} regulatory texts | {len(ctrl_df)} controls | {len(batches)} batch(es) per reg text")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPER — single GPT call with retry
+# ══════════════════════════════════════════════════════════════════════════════
+def call_gpt(system_prompt, user_prompt, retries=3):
+    for attempt in range(retries):
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt}
+                ],
+                temperature=0,
+                max_tokens=1000,
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = raw.lstrip("```json").lstrip("```").rstrip("```").strip()
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            print(f"    ⚠ JSON parse error (attempt {attempt+1}): {e}")
+            time.sleep(2)
+        except Exception as e:
+            print(f"    ⚠ API error (attempt {attempt+1}): {e}")
+            time.sleep(5)
+    return None   # all retries failed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 1 — Decompose regulatory text into atomic sub-requirements
+# ══════════════════════════════════════════════════════════════════════════════
+def decompose(reg_id, reg_text):
+    """
+    Breaks one regulatory text into focused, atomic sub-requirements.
+    Each sub-requirement is a single obligation — much easier to map to controls.
+    Returns list of {"subreq_id": "REG-001_S1", "text": "..."} dicts.
+    """
+    print(f"\n  [Step 1] Decomposing {reg_id} into sub-requirements...")
+
+    system = """You are a regulatory analyst. 
+Break the given regulatory text into atomic sub-requirements.
+Each sub-requirement must be ONE specific obligation or control expectation.
+Return ONLY a JSON array of strings — no prose, no markdown.
+Example: ["Implement MFA for privileged accounts", "Conduct periodic access reviews", ...]"""
+
+    result = call_gpt(system, f"Regulatory text (ID: {reg_id}):\n{reg_text}")
+
+    if result is None or not isinstance(result, list):
+        print(f"    ⚠ Decomposition failed for {reg_id} — using full text as single sub-requirement")
+        result = [reg_text]
+
+    # Tag each sub-requirement with reg_id for full traceability
+    subreqs = [
+        {"subreq_id": f"{reg_id}_S{i+1}", "reg_id": reg_id, "text": s}
+        for i, s in enumerate(result)
+    ]
+
+    print(f"    → {len(subreqs)} sub-requirements:")
+    for s in subreqs:
+        print(f"       {s['subreq_id']}: {s['text'][:90]}{'...' if len(s['text'])>90 else ''}")
+
+    return subreqs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 2 — Map each sub-requirement to a batch of controls
+# ══════════════════════════════════════════════════════════════════════════════
+def map_subreq_to_batch(subreq, batch):
+    """
+    Given one sub-requirement and a batch of controls, returns all relevant matches.
+    Each match includes: control_id, confidence (0-10), reason.
+    """
+    ctrl_list = "\n".join(
+        f"[{c['control_id']}] {c['control_title']} — {c['control_desc']}"
+        for c in batch
+    )
+
+    system = """You are a compliance mapping expert.
+Given ONE specific sub-requirement, identify ALL relevant controls — including indirect or thematic matches.
+Prefer HIGH RECALL: when in doubt, include the control.
+
+Confidence scoring:
+  9-10 = direct, explicit match
+  6-8  = strong thematic / contextual match
+  4-5  = indirect but plausible link
+  0-3  = unrelated — DO NOT include
+
+Return ONLY a JSON array:
+[{"control_id": "...", "confidence": 7, "reason": "one short sentence"}]
+Return [] if nothing matches. No prose, no markdown."""
+
+    user = f"Sub-requirement (ID: {subreq['subreq_id']}, parent: {subreq['reg_id']}):\n{subreq['text']}\n\nControls:\n{ctrl_list}"
+
+    result = call_gpt(system, user)
+
+    if result is None or not isinstance(result, list):
+        return []
+
+    # Validate structure and filter by confidence
+    valid = []
+    for m in result:
+        if isinstance(m, dict) and "control_id" in m and "confidence" in m:
+            m["control_id"] = str(m["control_id"])   # ensure string type
+            if m["confidence"] >= MIN_CONF:
+                # Attach traceability fields
+                m["subreq_id"] = subreq["subreq_id"]
+                m["reg_id"]    = subreq["reg_id"]
+                valid.append(m)
+    return valid
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — Aggregate: deduplicate per reg_id, keep highest confidence
+# ══════════════════════════════════════════════════════════════════════════════
+def aggregate(reg_id, all_matches):
+    """
+    Multiple sub-requirements may surface the same control.
+    Keep the entry with the highest confidence score for each unique control.
+    """
+    best = {}   # control_id → best match dict
+    for m in all_matches:
+        cid = m["control_id"]
+        if cid not in best or m["confidence"] > best[cid]["confidence"]:
+            best[cid] = m
+
+    print(f"    → {len(all_matches)} raw matches → {len(best)} unique controls after dedup")
+    return list(best.values())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN LOOP
+# ══════════════════════════════════════════════════════════════════════════════
+detailed_rows = []   # full detail: one row per (reg_id, control_id) match
+
+for _, row in reg_df.iterrows():
+    reg_id   = row["reg_id"]
+    reg_text = str(row["reg_text"])
+
+    print(f"\n{'═'*65}")
+    print(f"  REG ID: {reg_id}")
+    print(f"{'═'*65}")
+
+    # ── Step 1: Decompose ──────────────────────────────────────────────────
+    subreqs = decompose(reg_id, reg_text)
+
+    # ── Step 2: Map every sub-requirement across every batch ───────────────
+    print(f"\n  [Step 2] Mapping {len(subreqs)} sub-req(s) × {len(batches)} batch(es)...")
+    raw_matches = []
+
+    for s_idx, subreq in enumerate(subreqs):
+        sub_hits = 0
+        for b_idx, batch in enumerate(batches):
+            matches = map_subreq_to_batch(subreq, batch)
+            raw_matches.extend(matches)
+            sub_hits += len(matches)
+            time.sleep(0.2)   # gentle rate-limit buffer
+        print(f"    {subreq['subreq_id']} → {sub_hits} hit(s) across all batches")
+
+    # ── Step 3: Aggregate ──────────────────────────────────────────────────
+    print(f"\n  [Step 3] Aggregating matches for {reg_id}...")
+    final_matches = aggregate(reg_id, raw_matches)
+
+    for m in final_matches:
+        detailed_rows.append({
+            "reg_id"     : reg_id,
+            "control_id" : m["control_id"],
+            "confidence" : m["confidence"],
+            "subreq_id"  : m["subreq_id"],
+            "reason"     : m.get("reason", "")
+        })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUILD OUTPUT DATAFRAMES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Detailed table (with confidence, subreq traceability, reasons) ──────────
+detailed_df = (
+    pd.DataFrame(detailed_rows)
+    .merge(ctrl_df[["control_id", "control_title"]], on="control_id", how="left")
+    .sort_values(["reg_id", "confidence"], ascending=[True, False])
+    .reset_index(drop=True)
+)
+
+# ── FINAL OUTPUT: reg_id + comma-separated mapped control IDs ───────────────
+final_df = (
+    detailed_df
+    .groupby("reg_id")["control_id"]
+    .apply(lambda ids: ", ".join(sorted(ids)))
+    .reset_index()
+    .rename(columns={"control_id": "mapped_control_ids"})
+)
+
+print(f"\n\n✅ Mapping complete.")
+print(f"   {len(detailed_df)} total matches across {final_df['reg_id'].nunique()} regulatory text(s)\n")
+print(final_df.to_string(index=False))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VALIDATION — golden source used here only, never touched above
+# ══════════════════════════════════════════════════════════════════════════════
+pred_pairs = set(zip(detailed_df["reg_id"], detailed_df["control_id"]))
+gold_pairs = set(zip(golden_df["reg_id"],   golden_df["control_id"]))
+
+tp        = pred_pairs & gold_pairs
+fp        = pred_pairs - gold_pairs
+fn        = gold_pairs - pred_pairs
+precision = len(tp) / len(pred_pairs) if pred_pairs else 0
+recall    = len(tp) / len(gold_pairs) if gold_pairs else 0
+f1        = 2*precision*recall / (precision+recall) if (precision+recall) > 0 else 0
+
+print(f"\n{'═'*45}")
+print(f"  VALIDATION vs GOLDEN SOURCE")
+print(f"{'═'*45}")
+print(f"  Predicted pairs  : {len(pred_pairs)}")
+print(f"  Golden pairs     : {len(gold_pairs)}")
+print(f"  True positives   : {len(tp)}")
+print(f"  False positives  : {len(fp)}")
+print(f"  Missed (FN)      : {len(fn)}")
+print(f"  ─────────────────────────────────")
+print(f"  Precision        : {precision:.1%}")
+print(f"  Recall           : {recall:.1%}")
+print(f"  F1 Score         : {f1:.1%}")
+if fn:
+    print(f"\n  Missed pairs     : {sorted(fn)}")
+print(f"{'═'*45}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SAVE TO EXCEL — 3 sheets
+# ══════════════════════════════════════════════════════════════════════════════
+with pd.ExcelWriter("mapping_results.xlsx", engine="openpyxl") as writer:
+    final_df.to_excel(writer,    sheet_name="Final_Output",  index=False)   # ← main output
+    detailed_df.to_excel(writer, sheet_name="Detailed",      index=False)   # ← with confidence + reasons
+    pd.DataFrame([{                                                          # ← metrics
+        "Precision": f"{precision:.1%}", "Recall": f"{recall:.1%}",
+        "F1": f"{f1:.1%}", "TP": len(tp), "FP": len(fp), "FN": len(fn)
+    }]).to_excel(writer, sheet_name="Validation", index=False)
+
+print("\n💾 Saved → mapping_results.xlsx  (sheets: Final_Output | Detailed | Validation)")
+Final output looks like this:
+reg_id
+mapped_control_ids
+REG-001
+CTL-001, CTL-002, CTL-003, CTL-004, CTL-016
+REG-002
+CTL-005, CTL-006, CTL-007, CTL-008, CTL-018
+REG-003
+CTL-009, CTL-010, CTL-011, CTL-012, CTL-014
+Traceability chain in the Detailed sheet: reg_id → subreq_id → control_id → reason — so you can always trace why any control was mapped back to which exact sub-requirement of which regulatory text.
