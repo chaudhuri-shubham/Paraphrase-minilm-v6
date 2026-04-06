@@ -1,231 +1,247 @@
-# ── INSTALL ──────────────────────────────────────────────────────────────────
-# !pip install openai pandas openpyxl -q
+Cell 1 — Install
+!pip install openai pandas openpyxl -q
+Cell 2 — Config
+import os
 
-import os, json, time, pandas as pd
-from openai import OpenAI
-from collections import defaultdict
+# ── API ───────────────────────────────────────────────────────────────────────
+API_KEY = "sk-..."          # ← your OpenAI API key
+MODEL   = "gpt-4o-mini"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIG — edit these before running
-# ══════════════════════════════════════════════════════════════════════════════
-API_KEY       = "sk-..."                  # your OpenAI API key
-REG_FILE      = "regulatory_texts.xlsx"  # required cols: reg_id, reg_text
-CONTROLS_FILE = "controls.xlsx"          # required cols: control_id, control_title, control_desc
-GOLDEN_FILE   = "golden_source.xlsx"     # required cols: reg_id, control_id  (validation only)
-MIN_CONF      = 4                        # minimum confidence to keep a match (0-10)
-BATCH_SIZE    = 80                       # controls per API call
-MODEL         = "gpt-4o-mini"
+# ── Files ─────────────────────────────────────────────────────────────────────
+REG_FILE      = "regulatory_texts.xlsx"   # cols: reg_id, reg_text
+CONTROLS_FILE = "controls.xlsx"           # cols: control_id, control_title, control_desc
+GOLDEN_FILE   = "golden_source.xlsx"      # cols: reg_id, control_id  (validation only)
+OUTPUT_FILE   = "mapping_results.xlsx"
 
-client = OpenAI(api_key=API_KEY)
+# ── Column names — update to match your headers ───────────────────────────────
+REG_ID_COL     = "reg_id"
+REG_TEXT_COL   = "reg_text"
+CTRL_ID_COL    = "control_id"
+CTRL_TITLE_COL = "control_title"
+CTRL_DESC_COL  = "control_desc"
+GS_REG_COL     = "reg_id"
+GS_CTRL_COL    = "control_id"
 
+# ── Tuning ────────────────────────────────────────────────────────────────────
+SHORTLIST_SIZE = 30   # Call 1: how many candidates to retrieve (cast wide net)
+MAX_FINAL      = 15   # Call 2: max controls to keep per regulatory text
+MIN_CONF       = 4    # minimum confidence score to keep a match (0–10)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# LOAD FILES
-# ══════════════════════════════════════════════════════════════════════════════
+print("✅ Config ready")
+Cell 3 — (Optional) Generate sample data
+import pandas as pd
+
+pd.DataFrame([
+    {"reg_id": "REG-001", "reg_text": "Organizations must implement logical access controls ensuring only authorized individuals access information systems. This includes MFA for privileged accounts, regular access reviews, and automatic session timeouts after inactivity."},
+    {"reg_id": "REG-002", "reg_text": "All sensitive data must be encrypted at rest and in transit using approved algorithms. TLS 1.2 or higher is required for all network communications. Encryption keys must follow a formal key management program with regular rotation."},
+    {"reg_id": "REG-003", "reg_text": "Entities must establish an incident response plan covering detection, containment, eradication, and recovery. Incidents must be reported to authorities within 72 hours. Post-incident reviews must be documented."},
+]).to_excel("regulatory_texts.xlsx", index=False)
+
+pd.DataFrame([
+    {"control_id": "CTL-001", "control_title": "Multi-Factor Authentication",  "control_desc": "Enforce MFA for all user and privileged account logins."},
+    {"control_id": "CTL-002", "control_title": "Access Review",                 "control_desc": "Conduct quarterly reviews of user access rights and entitlements."},
+    {"control_id": "CTL-003", "control_title": "Session Timeout",               "control_desc": "Automatically terminate idle sessions after a defined inactivity period."},
+    {"control_id": "CTL-004", "control_title": "Role-Based Access Control",     "control_desc": "Restrict system access based on user roles and least privilege."},
+    {"control_id": "CTL-005", "control_title": "Data Encryption at Rest",       "control_desc": "Encrypt sensitive data in databases, file systems, and backups."},
+    {"control_id": "CTL-006", "control_title": "Data Encryption in Transit",    "control_desc": "Use TLS/SSL to encrypt data transmitted over networks."},
+    {"control_id": "CTL-007", "control_title": "Cryptographic Key Management",  "control_desc": "Manage encryption key lifecycle: generation, rotation, and revocation."},
+    {"control_id": "CTL-008", "control_title": "TLS Configuration",             "control_desc": "Enforce TLS 1.2+ for all web and API communications."},
+    {"control_id": "CTL-009", "control_title": "Incident Detection",            "control_desc": "Deploy tools to detect and alert on security incidents in real time."},
+    {"control_id": "CTL-010", "control_title": "Incident Response Plan",        "control_desc": "Document and test an incident response plan covering all phases."},
+    {"control_id": "CTL-011", "control_title": "Incident Reporting",            "control_desc": "Report security incidents to regulators within required timelines."},
+    {"control_id": "CTL-012", "control_title": "Post-Incident Review",          "control_desc": "Conduct root cause analysis and lessons learned after incidents."},
+    {"control_id": "CTL-013", "control_title": "Vulnerability Management",      "control_desc": "Identify, prioritise, and remediate system vulnerabilities regularly."},
+    {"control_id": "CTL-014", "control_title": "Security Logging",              "control_desc": "Collect and retain security event logs for audit and forensic purposes."},
+    {"control_id": "CTL-015", "control_title": "Password Policy",               "control_desc": "Enforce strong password complexity and rotation requirements."},
+    {"control_id": "CTL-016", "control_title": "Privileged Access Management",  "control_desc": "Control and monitor privileged accounts with enhanced security."},
+    {"control_id": "CTL-017", "control_title": "Network Segmentation",          "control_desc": "Segment networks to limit lateral movement and protect sensitive systems."},
+    {"control_id": "CTL-018", "control_title": "Certificate Management",        "control_desc": "Manage TLS certificate lifecycle including expiry and renewal."},
+    {"control_id": "CTL-019", "control_title": "Business Continuity Plan",      "control_desc": "Maintain plans for operations during and after disruptive events."},
+    {"control_id": "CTL-020", "control_title": "Change Management",             "control_desc": "Manage IT changes through a formal approval and testing process."},
+]).to_excel("controls.xlsx", index=False)
+
+pd.DataFrame([
+    {"reg_id": "REG-001", "control_id": "CTL-001"},
+    {"reg_id": "REG-001", "control_id": "CTL-002"},
+    {"reg_id": "REG-001", "control_id": "CTL-003"},
+    {"reg_id": "REG-002", "control_id": "CTL-005"},
+    {"reg_id": "REG-002", "control_id": "CTL-006"},
+    {"reg_id": "REG-002", "control_id": "CTL-007"},
+    {"reg_id": "REG-003", "control_id": "CTL-009"},
+    {"reg_id": "REG-003", "control_id": "CTL-010"},
+    {"reg_id": "REG-003", "control_id": "CTL-011"},
+]).to_excel("golden_source.xlsx", index=False)
+
+print("✅ Sample files created")
+Cell 4 — Load files
+import pandas as pd
+
 def load(path):
     return pd.read_excel(path) if path.endswith(('.xlsx', '.xls')) else pd.read_csv(path)
 
-print("Loading files...")
-reg_df      = load(REG_FILE)
-ctrl_df     = load(CONTROLS_FILE)
-golden_df   = load(GOLDEN_FILE)
+reg_df    = load(REG_FILE)
+ctrl_df   = load(CONTROLS_FILE)
+golden_df = load(GOLDEN_FILE)
 
-# Cast IDs to string to avoid int/str mismatch issues
-reg_df["reg_id"]       = reg_df["reg_id"].astype(str)
-ctrl_df["control_id"]  = ctrl_df["control_id"].astype(str)
-golden_df["reg_id"]    = golden_df["reg_id"].astype(str)
-golden_df["control_id"]= golden_df["control_id"].astype(str)
+# Ensure all IDs are strings
+reg_df[REG_ID_COL]       = reg_df[REG_ID_COL].astype(str)
+ctrl_df[CTRL_ID_COL]     = ctrl_df[CTRL_ID_COL].astype(str)
+golden_df[GS_REG_COL]    = golden_df[GS_REG_COL].astype(str)
+golden_df[GS_CTRL_COL]   = golden_df[GS_CTRL_COL].astype(str)
 
-controls = ctrl_df.to_dict("records")
-batches  = [controls[i:i+BATCH_SIZE] for i in range(0, len(controls), BATCH_SIZE)]
+# Compact title-only list for Call 1 (low token cost)
+all_titles = "\n".join(
+    f"{r[CTRL_ID_COL]}: {r[CTRL_TITLE_COL]}"
+    for _, r in ctrl_df.iterrows()
+)
 
-print(f"  ✅ {len(reg_df)} regulatory texts | {len(ctrl_df)} controls | {len(batches)} batch(es) per reg text")
+# Full description lookup for Call 2
+ctrl_desc_map = {
+    r[CTRL_ID_COL]: f"{r[CTRL_TITLE_COL]} — {r[CTRL_DESC_COL]}"
+    for _, r in ctrl_df.iterrows()
+}
 
+print(f"✅ {len(reg_df)} regulatory texts | {len(ctrl_df)} controls loaded")
+Cell 5 — GPT helper + two mapping calls
+import json, time
+from openai import OpenAI
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPER — single GPT call with retry
-# ══════════════════════════════════════════════════════════════════════════════
-def call_gpt(system_prompt, user_prompt, retries=3):
+client = OpenAI(api_key=API_KEY)
+
+def call_gpt(system, user, retries=3):
+    """Single GPT call with retry. Returns parsed JSON or None."""
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_prompt}
-                ],
                 temperature=0,
-                max_tokens=1000,
+                max_tokens=600,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user}
+                ]
             )
             raw = resp.choices[0].message.content.strip()
             raw = raw.lstrip("```json").lstrip("```").rstrip("```").strip()
             return json.loads(raw)
-        except json.JSONDecodeError as e:
-            print(f"    ⚠ JSON parse error (attempt {attempt+1}): {e}")
+        except json.JSONDecodeError:
+            print(f"    ⚠ JSON parse error on attempt {attempt+1}, retrying...")
             time.sleep(2)
         except Exception as e:
-            print(f"    ⚠ API error (attempt {attempt+1}): {e}")
+            print(f"    ⚠ API error on attempt {attempt+1}: {e}")
             time.sleep(5)
-    return None   # all retries failed
+    return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 1 — Decompose regulatory text into atomic sub-requirements
-# ══════════════════════════════════════════════════════════════════════════════
-def decompose(reg_id, reg_text):
+def get_shortlist(reg_id, reg_text):
     """
-    Breaks one regulatory text into focused, atomic sub-requirements.
-    Each sub-requirement is a single obligation — much easier to map to controls.
-    Returns list of {"subreq_id": "REG-001_S1", "text": "..."} dicts.
+    CALL 1 — Send all control titles (no descriptions) in one shot.
+    Ask GPT to return ~SHORTLIST_SIZE candidate IDs broadly.
+    Tokens: very low (titles only, no descriptions).
     """
-    print(f"\n  [Step 1] Decomposing {reg_id} into sub-requirements...")
+    system = f"""You are a compliance expert. 
+Given a regulatory text, return the IDs of the {SHORTLIST_SIZE} most relevant controls from the list.
+Cast a wide net — include direct AND indirect matches.
+Return ONLY a JSON array of ID strings: ["CTL-001", "CTL-005", ...]
+No prose, no markdown."""
 
-    system = """You are a regulatory analyst. 
-Break the given regulatory text into atomic sub-requirements.
-Each sub-requirement must be ONE specific obligation or control expectation.
-Return ONLY a JSON array of strings — no prose, no markdown.
-Example: ["Implement MFA for privileged accounts", "Conduct periodic access reviews", ...]"""
-
-    result = call_gpt(system, f"Regulatory text (ID: {reg_id}):\n{reg_text}")
-
-    if result is None or not isinstance(result, list):
-        print(f"    ⚠ Decomposition failed for {reg_id} — using full text as single sub-requirement")
-        result = [reg_text]
-
-    # Tag each sub-requirement with reg_id for full traceability
-    subreqs = [
-        {"subreq_id": f"{reg_id}_S{i+1}", "reg_id": reg_id, "text": s}
-        for i, s in enumerate(result)
-    ]
-
-    print(f"    → {len(subreqs)} sub-requirements:")
-    for s in subreqs:
-        print(f"       {s['subreq_id']}: {s['text'][:90]}{'...' if len(s['text'])>90 else ''}")
-
-    return subreqs
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — Map each sub-requirement to a batch of controls
-# ══════════════════════════════════════════════════════════════════════════════
-def map_subreq_to_batch(subreq, batch):
-    """
-    Given one sub-requirement and a batch of controls, returns all relevant matches.
-    Each match includes: control_id, confidence (0-10), reason.
-    """
-    ctrl_list = "\n".join(
-        f"[{c['control_id']}] {c['control_title']} — {c['control_desc']}"
-        for c in batch
-    )
-
-    system = """You are a compliance mapping expert.
-Given ONE specific sub-requirement, identify ALL relevant controls — including indirect or thematic matches.
-Prefer HIGH RECALL: when in doubt, include the control.
-
-Confidence scoring:
-  9-10 = direct, explicit match
-  6-8  = strong thematic / contextual match
-  4-5  = indirect but plausible link
-  0-3  = unrelated — DO NOT include
-
-Return ONLY a JSON array:
-[{"control_id": "...", "confidence": 7, "reason": "one short sentence"}]
-Return [] if nothing matches. No prose, no markdown."""
-
-    user = f"Sub-requirement (ID: {subreq['subreq_id']}, parent: {subreq['reg_id']}):\n{subreq['text']}\n\nControls:\n{ctrl_list}"
+    user = f"Regulatory text (ID: {reg_id}):\n{reg_text}\n\nAll controls (ID: Title):\n{all_titles}"
 
     result = call_gpt(system, user)
-
-    if result is None or not isinstance(result, list):
+    if not isinstance(result, list):
+        print(f"  ⚠ Shortlist failed for {reg_id}, skipping.")
         return []
 
-    # Validate structure and filter by confidence
-    valid = []
-    for m in result:
-        if isinstance(m, dict) and "control_id" in m and "confidence" in m:
-            m["control_id"] = str(m["control_id"])   # ensure string type
-            if m["confidence"] >= MIN_CONF:
-                # Attach traceability fields
-                m["subreq_id"] = subreq["subreq_id"]
-                m["reg_id"]    = subreq["reg_id"]
-                valid.append(m)
+    # Keep only valid IDs that exist in our controls file
+    valid = [str(i) for i in result if str(i) in ctrl_desc_map]
     return valid
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — Aggregate: deduplicate per reg_id, keep highest confidence
-# ══════════════════════════════════════════════════════════════════════════════
-def aggregate(reg_id, all_matches):
+def verify_and_score(reg_id, reg_text, shortlist_ids):
     """
-    Multiple sub-requirements may surface the same control.
-    Keep the entry with the highest confidence score for each unique control.
+    CALL 2 — Send only shortlisted controls with FULL descriptions.
+    Ask GPT to score each and return top MAX_FINAL matches.
+    Tokens: low (only 20–30 controls with descriptions).
     """
-    best = {}   # control_id → best match dict
-    for m in all_matches:
-        cid = m["control_id"]
-        if cid not in best or m["confidence"] > best[cid]["confidence"]:
-            best[cid] = m
+    shortlist_text = "\n".join(
+        f"[{cid}] {ctrl_desc_map[cid]}"
+        for cid in shortlist_ids
+    )
 
-    print(f"    → {len(all_matches)} raw matches → {len(best)} unique controls after dedup")
-    return list(best.values())
+    system = f"""You are a compliance expert. Score each control's relevance to the regulatory text.
+Confidence 0–10:
+  9–10 = direct, explicit match
+  6–8  = strong thematic match
+  4–5  = indirect but plausible
+  0–3  = not relevant — exclude
 
+Rules:
+- Return a maximum of {MAX_FINAL} controls (the most relevant ones)
+- Only include controls with confidence >= {MIN_CONF}
+- Return ONLY a JSON array sorted by confidence descending:
+  [{{"control_id":"...","confidence":8,"reason":"one short sentence"}}]
+- Return [] if nothing qualifies. No prose, no markdown."""
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN LOOP
-# ══════════════════════════════════════════════════════════════════════════════
-detailed_rows = []   # full detail: one row per (reg_id, control_id) match
+    user = f"Regulatory text (ID: {reg_id}):\n{reg_text}\n\nCandidate controls:\n{shortlist_text}"
+
+    result = call_gpt(system, user)
+    if not isinstance(result, list):
+        return []
+
+    verified = []
+    for m in result:
+        if (isinstance(m, dict)
+                and str(m.get("control_id", "")) in ctrl_desc_map
+                and m.get("confidence", 0) >= MIN_CONF):
+            verified.append({
+                "reg_id"     : reg_id,
+                "control_id" : str(m["control_id"]),
+                "confidence" : m["confidence"],
+                "reason"     : m.get("reason", "")
+            })
+
+    # Hard cap at MAX_FINAL
+    return sorted(verified, key=lambda x: x["confidence"], reverse=True)[:MAX_FINAL]
+Cell 6 — Run mapping
+detailed_rows = []
 
 for _, row in reg_df.iterrows():
-    reg_id   = row["reg_id"]
-    reg_text = str(row["reg_text"])
+    reg_id   = row[REG_ID_COL]
+    reg_text = str(row[REG_TEXT_COL])
 
-    print(f"\n{'═'*65}")
-    print(f"  REG ID: {reg_id}")
-    print(f"{'═'*65}")
+    print(f"\n{'═'*55}")
+    print(f"  {reg_id}")
+    print(f"{'═'*55}")
 
-    # ── Step 1: Decompose ──────────────────────────────────────────────────
-    subreqs = decompose(reg_id, reg_text)
+    # Call 1 — broad shortlist from titles only
+    print(f"  Call 1: Scanning all {len(ctrl_df)} control titles...")
+    shortlist = get_shortlist(reg_id, reg_text)
+    print(f"  → {len(shortlist)} candidates: {shortlist}")
 
-    # ── Step 2: Map every sub-requirement across every batch ───────────────
-    print(f"\n  [Step 2] Mapping {len(subreqs)} sub-req(s) × {len(batches)} batch(es)...")
-    raw_matches = []
+    if not shortlist:
+        continue
 
-    for s_idx, subreq in enumerate(subreqs):
-        sub_hits = 0
-        for b_idx, batch in enumerate(batches):
-            matches = map_subreq_to_batch(subreq, batch)
-            raw_matches.extend(matches)
-            sub_hits += len(matches)
-            time.sleep(0.2)   # gentle rate-limit buffer
-        print(f"    {subreq['subreq_id']} → {sub_hits} hit(s) across all batches")
+    # Call 2 — score shortlist with full descriptions, keep top MAX_FINAL
+    print(f"  Call 2: Scoring {len(shortlist)} candidates with full descriptions...")
+    verified = verify_and_score(reg_id, reg_text, shortlist)
+    print(f"  → {len(verified)} final matches (max {MAX_FINAL}, conf ≥ {MIN_CONF}):")
+    for m in verified:
+        print(f"     [{m['confidence']}] {m['control_id']} — {m['reason'][:70]}")
 
-    # ── Step 3: Aggregate ──────────────────────────────────────────────────
-    print(f"\n  [Step 3] Aggregating matches for {reg_id}...")
-    final_matches = aggregate(reg_id, raw_matches)
+    detailed_rows.extend(verified)
+    time.sleep(0.5)
 
-    for m in final_matches:
-        detailed_rows.append({
-            "reg_id"     : reg_id,
-            "control_id" : m["control_id"],
-            "confidence" : m["confidence"],
-            "subreq_id"  : m["subreq_id"],
-            "reason"     : m.get("reason", "")
-        })
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# BUILD OUTPUT DATAFRAMES
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── Detailed table (with confidence, subreq traceability, reasons) ──────────
+print(f"\n\n✅ Mapping complete — {len(detailed_rows)} total matches")
+Cell 7 — Build output dataframes
+# Detailed table — one row per match with confidence and reason
 detailed_df = (
     pd.DataFrame(detailed_rows)
-    .merge(ctrl_df[["control_id", "control_title"]], on="control_id", how="left")
+    .merge(ctrl_df[[CTRL_ID_COL, CTRL_TITLE_COL]], on=CTRL_ID_COL, how="left")
     .sort_values(["reg_id", "confidence"], ascending=[True, False])
     .reset_index(drop=True)
 )
 
-# ── FINAL OUTPUT: reg_id + comma-separated mapped control IDs ───────────────
+# ── FINAL OUTPUT: reg_id | mapped_control_ids ─────────────────────────────
 final_df = (
     detailed_df
     .groupby("reg_id")["control_id"]
@@ -234,16 +250,11 @@ final_df = (
     .rename(columns={"control_id": "mapped_control_ids"})
 )
 
-print(f"\n\n✅ Mapping complete.")
-print(f"   {len(detailed_df)} total matches across {final_df['reg_id'].nunique()} regulatory text(s)\n")
+print("FINAL OUTPUT:")
 print(final_df.to_string(index=False))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VALIDATION — golden source used here only, never touched above
-# ══════════════════════════════════════════════════════════════════════════════
+Cell 8 — Validate against golden source
 pred_pairs = set(zip(detailed_df["reg_id"], detailed_df["control_id"]))
-gold_pairs = set(zip(golden_df["reg_id"],   golden_df["control_id"]))
+gold_pairs = set(zip(golden_df[GS_REG_COL], golden_df[GS_CTRL_COL]))
 
 tp        = pred_pairs & gold_pairs
 fp        = pred_pairs - gold_pairs
@@ -252,42 +263,33 @@ precision = len(tp) / len(pred_pairs) if pred_pairs else 0
 recall    = len(tp) / len(gold_pairs) if gold_pairs else 0
 f1        = 2*precision*recall / (precision+recall) if (precision+recall) > 0 else 0
 
-print(f"\n{'═'*45}")
+print(f"{'═'*40}")
 print(f"  VALIDATION vs GOLDEN SOURCE")
-print(f"{'═'*45}")
-print(f"  Predicted pairs  : {len(pred_pairs)}")
-print(f"  Golden pairs     : {len(gold_pairs)}")
-print(f"  True positives   : {len(tp)}")
-print(f"  False positives  : {len(fp)}")
-print(f"  Missed (FN)      : {len(fn)}")
-print(f"  ─────────────────────────────────")
-print(f"  Precision        : {precision:.1%}")
-print(f"  Recall           : {recall:.1%}")
-print(f"  F1 Score         : {f1:.1%}")
+print(f"{'═'*40}")
+print(f"  Predicted    : {len(pred_pairs)}")
+print(f"  Golden       : {len(gold_pairs)}")
+print(f"  True  Pos    : {len(tp)}")
+print(f"  False Pos    : {len(fp)}")
+print(f"  Missed (FN)  : {len(fn)}")
+print(f"  ──────────────────────────────────")
+print(f"  Precision    : {precision:.1%}")
+print(f"  Recall       : {recall:.1%}")
+print(f"  F1 Score     : {f1:.1%}")
 if fn:
-    print(f"\n  Missed pairs     : {sorted(fn)}")
-print(f"{'═'*45}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SAVE TO EXCEL — 3 sheets
-# ══════════════════════════════════════════════════════════════════════════════
-with pd.ExcelWriter("mapping_results.xlsx", engine="openpyxl") as writer:
-    final_df.to_excel(writer,    sheet_name="Final_Output",  index=False)   # ← main output
-    detailed_df.to_excel(writer, sheet_name="Detailed",      index=False)   # ← with confidence + reasons
-    pd.DataFrame([{                                                          # ← metrics
-        "Precision": f"{precision:.1%}", "Recall": f"{recall:.1%}",
-        "F1": f"{f1:.1%}", "TP": len(tp), "FP": len(fp), "FN": len(fn)
+    print(f"  Missed pairs : {sorted(fn)}")
+print(f"{'═'*40}")
+Cell 9 — Save to Excel
+with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
+    final_df.to_excel(writer,    sheet_name="Final_Output", index=False)  # reg_id | mapped_control_ids
+    detailed_df.to_excel(writer, sheet_name="Detailed",     index=False)  # with confidence + reasons
+    pd.DataFrame([{
+        "Precision" : f"{precision:.1%}",
+        "Recall"    : f"{recall:.1%}",
+        "F1"        : f"{f1:.1%}",
+        "TP"        : len(tp),
+        "FP"        : len(fp),
+        "FN"        : len(fn)
     }]).to_excel(writer, sheet_name="Validation", index=False)
 
-print("\n💾 Saved → mapping_results.xlsx  (sheets: Final_Output | Detailed | Validation)")
-Final output looks like this:
-reg_id
-mapped_control_ids
-REG-001
-CTL-001, CTL-002, CTL-003, CTL-004, CTL-016
-REG-002
-CTL-005, CTL-006, CTL-007, CTL-008, CTL-018
-REG-003
-CTL-009, CTL-010, CTL-011, CTL-012, CTL-014
-Traceability chain in the Detailed sheet: reg_id → subreq_id → control_id → reason — so you can always trace why any control was mapped back to which exact sub-requirement of which regulatory text.
+print(f"💾 Saved → {OUTPUT_FILE}")
+print(f"   Sheets: Final_Output | Detailed | Validation")
