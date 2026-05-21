@@ -1,0 +1,6 @@
+
+I have two datasets. 1st one has record id, lob, location and legal entity. My job is to create a solution to recommend legal entity. Now one record id can have multiple legal entities. I am building the solution using a mapping dataset. Mapping dataset has location , lob and legal entity. Now there are few rows present where location is blank or lob is blank. In main data or new data also this can happen. I have a ranked list which is prepared based on the main dataset. Like if for location -india and lob - cmb , legal entity rbi comes frequently then I will give rbi as 1st recommendation for legal entity, similarly next one as 2nd. Create a whole solution keeping every scenario in mind and think about all the edge cases also create a result matrix which will have 1st pred coverage, 2nd pred coverage and 3rd. 2nd pred coverage means 1st or 2nd pred is correct. It should be similar to any ml model classification matrix which will have class wise accuracy. Also I want a record id wise matrix and a row wise matrix
+
+
+
+
