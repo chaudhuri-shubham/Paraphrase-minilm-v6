@@ -1,6 +1,681 @@
 
 I have two datasets. 1st one has record id, lob, location and legal entity. My job is to create a solution to recommend legal entity. Now one record id can have multiple legal entities. I am building the solution using a mapping dataset. Mapping dataset has location , lob and legal entity. Now there are few rows present where location is blank or lob is blank. In main data or new data also this can happen. I have a ranked list which is prepared based on the main dataset. Like if for location -india and lob - cmb , legal entity rbi comes frequently then I will give rbi as 1st recommendation for legal entity, similarly next one as 2nd. Create a whole solution keeping every scenario in mind and think about all the edge cases also create a result matrix which will have 1st pred coverage, 2nd pred coverage and 3rd. 2nd pred coverage means 1st or 2nd pred is correct. It should be similar to any ml model classification matrix which will have class wise accuracy. Also I want a record id wise matrix and a row wise matrix
 
+# ============================================================
+# CELL 0 — Imports
+# ============================================================
+import pandas as pd
+import numpy as np
+from collections import Counter
+import warnings
+warnings.filterwarnings('ignore')
+
+pd.set_option('display.max_columns', 30)
+pd.set_option('display.width', 200)
+pd.set_option('display.max_rows', 200)
+pd.set_option('display.float_format', '{:.3f}'.format)
+
+
+# ============================================================
+# CELL 1 — Utilities
+# ============================================================
+def normalize(val) -> str:
+    """Lowercase + strip + coerce NaN/None to empty string."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ''
+    return str(val).strip().lower()
+
+
+def safe_str(val) -> str:
+    """Strip whitespace, keep original case; coerce NaN/None to empty string."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ''
+    return str(val).strip()
+
+
+def pct(num, denom, decimals=1) -> str:
+    if denom == 0:
+        return 'N/A'
+    return f'{num}/{denom} ({num / denom * 100:.{decimals}f}%)'
+
+
+# ============================================================
+# CELL 2 — Ranked Lookup Builder
+# ============================================================
+def build_ranked_lookup(mapping_df: pd.DataFrame,
+                        main_df: pd.DataFrame = None) -> dict:
+    """
+    Build a frequency-ranked lookup: {(loc_norm, lob_norm): [entity, ...]}
+
+    Parameters
+    ----------
+    mapping_df : DataFrame with columns [location, lob, legal_entity]
+    main_df    : Optional DataFrame with [record_id, location, lob, legal_entity]
+                 Used to augment frequency counts from historical data.
+
+    Edge cases
+    ----------
+    * Blank legal_entity rows are dropped.
+    * Blank location/lob in mapping creates partial-match fallback keys.
+    * Case/whitespace differences treated as the same entity.
+    """
+    frames = []
+
+    if mapping_df is not None and len(mapping_df) > 0:
+        m = mapping_df[['location', 'lob', 'legal_entity']].copy()
+        frames.append(m)
+
+    if main_df is not None and len(main_df) > 0:
+        d = main_df[['location', 'lob', 'legal_entity']].copy()
+        frames.append(d)
+
+    if not frames:
+        return {}
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined['loc_norm']    = combined['location'].apply(normalize)
+    combined['lob_norm']    = combined['lob'].apply(normalize)
+    combined['entity_norm'] = combined['legal_entity'].apply(normalize)
+    combined['entity_disp'] = combined['legal_entity'].apply(safe_str)
+
+    # Drop blank legal entity rows
+    combined = combined[combined['entity_norm'] != ''].copy()
+
+    # Frequency count
+    freq = (combined
+            .groupby(['loc_norm', 'lob_norm', 'entity_norm', 'entity_disp'])
+            .size()
+            .reset_index(name='count'))
+
+    ranked_lookup = {}
+    for (loc, lob), grp in freq.groupby(['loc_norm', 'lob_norm']):
+        ranked_lookup[(loc, lob)] = (grp
+                                     .sort_values('count', ascending=False)
+                                     ['entity_disp']
+                                     .tolist())
+    return ranked_lookup
+
+
+def build_global_fallback(ranked_lookup: dict) -> list:
+    """
+    Aggregate all entities by weighted rank across every key.
+    Used as the final fallback when nothing else matches.
+    """
+    global_counter: Counter = Counter()
+    norm_to_disp = {}
+
+    for entities in ranked_lookup.values():
+        n = len(entities)
+        for rank, entity in enumerate(entities):
+            n_key = normalize(entity)
+            global_counter[n_key] += (n - rank)
+            norm_to_disp.setdefault(n_key, entity)
+
+    return [norm_to_disp[norm]
+            for norm, _ in global_counter.most_common()
+            if norm in norm_to_disp]
+
+
+# ============================================================
+# CELL 3 — Recommender Class
+# ============================================================
+class LegalEntityRecommender:
+    """
+    Recommends up to `max_recs` legal entities for a given (location, lob).
+
+    Fallback Hierarchy
+    ------------------
+    Priority 1  → Exact match         : (location, lob)   in mapping
+    Priority 2  → Location-only match : (location, '')    in mapping
+    Priority 3  → LOB-only match      : ('',       lob)   in mapping
+    Priority 4  → Global mapping rows : ('',       '')    in mapping
+    Priority 5  → Computed global     : all entities by overall frequency
+
+    Entities are deduplicated across priority levels (first occurrence wins).
+    If location is blank → skip priorities 1 and 2.
+    If lob is blank      → skip priorities 1 and 3.
+    If both blank        → jump straight to priorities 4 and 5.
+    """
+
+    def __init__(self, mapping_df, main_df=None, max_recs=3):
+        self.max_recs         = max_recs
+        self.ranked_lookup    = build_ranked_lookup(mapping_df, main_df)
+        self._global_fallback = build_global_fallback(self.ranked_lookup)
+
+    def recommend(self, location, lob) -> tuple:
+        """
+        Return (predictions, match_types) for a single row.
+
+        Match type labels
+        -----------------
+        exact           : (location, lob) key found
+        location_only   : (location, '') key found
+        lob_only        : ('', lob) key found
+        global_mapping  : ('', '') key found
+        global_computed : derived from overall frequency
+        no_match        : slot is None — nothing available
+        """
+        loc   = normalize(location)
+        lob_n = normalize(lob)
+
+        has_loc = loc   != ''
+        has_lob = lob_n != ''
+
+        candidates = []   # (display_entity, match_type)
+        seen = set()      # normalised entity names already added
+
+        def _add(key, mtype):
+            if key in self.ranked_lookup:
+                for entity in self.ranked_lookup[key]:
+                    e_norm = normalize(entity)
+                    if e_norm and e_norm not in seen:
+                        candidates.append((entity, mtype))
+                        seen.add(e_norm)
+
+        # Priority 1 — Exact match
+        if has_loc and has_lob:
+            _add((loc, lob_n), 'exact')
+
+        # Priority 2 — Location-only
+        if has_loc and len(candidates) < self.max_recs:
+            _add((loc, ''), 'location_only')
+
+        # Priority 3 — LOB-only
+        if has_lob and len(candidates) < self.max_recs:
+            _add(('', lob_n), 'lob_only')
+
+        # Priority 4 — Global mapping rows
+        if len(candidates) < self.max_recs:
+            _add(('', ''), 'global_mapping')
+
+        # Priority 5 — Computed global fallback
+        if len(candidates) < self.max_recs:
+            for entity in self._global_fallback:
+                e_norm = normalize(entity)
+                if e_norm and e_norm not in seen:
+                    candidates.append((entity, 'global_computed'))
+                    seen.add(e_norm)
+                if len(candidates) >= self.max_recs:
+                    break
+
+        # Pad remaining slots
+        while len(candidates) < self.max_recs:
+            candidates.append((None, 'no_match'))
+
+        c = candidates[:self.max_recs]
+        return [x[0] for x in c], [x[1] for x in c]
+
+    def recommend_batch(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add pred_1..pred_N and match_type_1..match_type_N columns to df."""
+        result = df.copy().reset_index(drop=True)
+        rows = []
+        for _, row in result.iterrows():
+            preds, mtypes = self.recommend(row.get('location'), row.get('lob'))
+            r = {}
+            for i in range(self.max_recs):
+                r[f'pred_{i+1}']       = preds[i]
+                r[f'match_type_{i+1}'] = mtypes[i]
+            rows.append(r)
+        return pd.concat([result, pd.DataFrame(rows)], axis=1)
+
+
+# ============================================================
+# CELL 4 — Evaluator Class
+# ============================================================
+class Evaluator:
+    """
+    Evaluates LegalEntityRecommender against ground-truth main dataset.
+
+    Three matrices
+    --------------
+    row_wise_matrix()    — one row per data row
+    record_wise_matrix() — one row per record_id (set coverage)
+    class_wise_matrix()  — one row per legal_entity class (precision/recall)
+
+    Coverage semantics
+    ------------------
+    covered_@1 : pred_1 == actual
+    covered_@2 : pred_1 OR pred_2 == actual          (cumulative)
+    covered_@3 : pred_1 OR pred_2 OR pred_3 == actual
+
+    Record-level covered_@k : fraction of the record's actual entities
+                              found in top-k predictions across its rows.
+    """
+
+    def __init__(self, recommender: LegalEntityRecommender):
+        self.rec   = recommender
+        self._eval = None
+
+    def evaluate(self, main_df: pd.DataFrame) -> 'Evaluator':
+        """Run predictions and compute all correctness flags. Returns self."""
+        df = self.rec.recommend_batch(main_df)
+        k  = self.rec.max_recs
+
+        df['actual_norm'] = df['legal_entity'].apply(normalize)
+
+        for i in range(1, k + 1):
+            df[f'pred_{i}_norm'] = df[f'pred_{i}'].apply(normalize)
+
+        # Per-rank correctness flags
+        for i in range(1, k + 1):
+            df[f'correct_{i}'] = (
+                (df['actual_norm'] == df[f'pred_{i}_norm'])
+                & (df['actual_norm'] != '')
+                & (df[f'pred_{i}_norm'] != '')
+            )
+
+        # Cumulative coverage
+        df['covered_@1'] = df['correct_1']
+        if k >= 2: df['covered_@2'] = df['covered_@1'] | df['correct_2']
+        if k >= 3: df['covered_@3'] = df['covered_@2'] | df['correct_3']
+
+        def _first_hit(row):
+            for i in range(1, k + 1):
+                if row.get(f'correct_{i}', False):
+                    return i
+            return None
+
+        df['first_correct_pred'] = df.apply(_first_hit, axis=1)
+        self._eval = df
+        return self
+
+    # ------------------------------------------------------------------
+    # MATRIX 1 — ROW WISE
+    # ------------------------------------------------------------------
+    def row_wise_matrix(self) -> pd.DataFrame:
+        self._check()
+        k    = self.rec.max_recs
+        keep = (['record_id', 'location', 'lob', 'legal_entity']
+                + [f'pred_{i}'      for i in range(1, k + 1)]
+                + ['match_type_1']
+                + [f'correct_{i}'   for i in range(1, k + 1)]
+                + [f'covered_@{i}'  for i in range(1, k + 1)]
+                + ['first_correct_pred'])
+        return self._eval[[c for c in keep if c in self._eval.columns]].copy()
+
+    # ------------------------------------------------------------------
+    # MATRIX 2 — RECORD WISE
+    # ------------------------------------------------------------------
+    def record_wise_matrix(self) -> pd.DataFrame:
+        """
+        One row per record_id.
+
+        actual_entities  : union of all legal_entity values for the record
+        pred_k_entities  : union of pred_k across all rows of the record
+        hits_@k          : |actual ∩ cumulative_pred_k|
+        coverage_@k      : hits_@k / |actual|
+        fully_covered_@k : True if ALL actual entities were found
+        """
+        self._check()
+        k  = self.rec.max_recs
+        df = self._eval
+
+        records = []
+        for record_id, grp in df.groupby('record_id'):
+            actual_set = set(grp['actual_norm'].tolist()) - {''}
+            n_actual   = len(actual_set)
+
+            pred_sets = {}
+            for i in range(1, k + 1):
+                pred_sets[i] = set(grp[f'pred_{i}_norm'].tolist()) - {''}
+
+            cum_sets = {}
+            running  = set()
+            for i in range(1, k + 1):
+                running      = running | pred_sets[i]
+                cum_sets[i]  = running.copy()
+
+            row = {
+                'record_id':           record_id,
+                'num_actual_entities': n_actual,
+                'actual_entities':     ' | '.join(sorted(actual_set)),
+                'num_rows':            len(grp),
+            }
+
+            for i in range(1, k + 1):
+                disp = (grp[[f'pred_{i}', f'pred_{i}_norm']]
+                        .drop_duplicates()
+                        .set_index(f'pred_{i}_norm')[f'pred_{i}']
+                        .dropna().to_dict())
+                disp_set = {disp.get(n, n) for n in pred_sets[i]}
+                row[f'pred_{i}_entities'] = ' | '.join(
+                    sorted([str(v) for v in disp_set if v]))
+
+                hits = len(actual_set & cum_sets[i])
+                row[f'hits_@{i}']          = hits
+                row[f'coverage_@{i}']      = f'{hits}/{n_actual}'
+                row[f'pct_covered_@{i}']   = (
+                    round(hits / n_actual * 100, 1) if n_actual > 0 else 0.0)
+                row[f'fully_covered_@{i}'] = (hits == n_actual)
+
+            records.append(row)
+
+        return pd.DataFrame(records)
+
+    # ------------------------------------------------------------------
+    # MATRIX 3 — CLASS WISE
+    # ------------------------------------------------------------------
+    def class_wise_matrix(self) -> pd.DataFrame:
+        """
+        One row per legal_entity class — like sklearn classification_report.
+
+        precision_@1 : P(actual == cls | pred_1 == cls)
+        recall_@1    : P(covered_@1 | actual == cls)
+        recall_@2    : P(covered_@2 | actual == cls)   cumulative
+        recall_@3    : P(covered_@3 | actual == cls)
+        f1_@1        : harmonic mean of precision_@1 and recall_@1
+        """
+        self._check()
+        k  = self.rec.max_recs
+        df = self._eval
+
+        classes = sorted(c for c in df['actual_norm'].unique()
+                         if c and c != 'nan')
+        rows = []
+        for cls in classes:
+            act_mask = df['actual_norm'] == cls
+            support  = int(act_mask.sum())
+            if support == 0:
+                continue
+
+            p1_mask    = df['pred_1_norm'] == cls
+            true_pos   = (df.loc[p1_mask, 'actual_norm'] == cls).sum()
+            precision1 = true_pos / p1_mask.sum() if p1_mask.sum() > 0 else 0.0
+            recall1    = df.loc[act_mask, 'covered_@1'].sum() / support
+            f1_1       = (2 * precision1 * recall1 / (precision1 + recall1)
+                          if (precision1 + recall1) > 0 else 0.0)
+
+            disp = df.loc[act_mask, 'legal_entity'].value_counts().index[0]
+
+            row = {
+                'legal_entity': disp,
+                'support':      support,
+                'precision_@1': round(precision1, 3),
+                'recall_@1':    round(recall1, 3),
+                'f1_@1':        round(f1_1, 3),
+            }
+            for i in range(2, k + 1):
+                col = f'covered_@{i}'
+                if col in df.columns:
+                    row[f'recall_@{i}'] = round(
+                        df.loc[act_mask, col].sum() / support, 3)
+            rows.append(row)
+
+        class_df = (pd.DataFrame(rows)
+                    .sort_values('support', ascending=False)
+                    .reset_index(drop=True))
+
+        total       = class_df['support'].sum()
+        metric_cols = [c for c in class_df.columns
+                       if c not in ('legal_entity', 'support')]
+
+        macro_row    = {'legal_entity': '── macro avg ──',    'support': total}
+        weighted_row = {'legal_entity': '── weighted avg ──', 'support': total}
+        for col in metric_cols:
+            macro_row[col]    = round(class_df[col].mean(), 3)
+            weighted_row[col] = round(
+                (class_df[col] * class_df['support']).sum() / total, 3)
+
+        return pd.concat(
+            [class_df, pd.DataFrame([macro_row, weighted_row])],
+            ignore_index=True)
+
+    # ------------------------------------------------------------------
+    # SUMMARY METRICS
+    # ------------------------------------------------------------------
+    def summary_metrics(self) -> dict:
+        self._check()
+        k     = self.rec.max_recs
+        df    = self._eval
+        valid = df[df['actual_norm'] != '']
+        n_v   = len(valid)
+
+        s = {
+            'total_rows':             len(df),
+            'valid_rows (non-blank)': n_v,
+        }
+        for i in range(1, k + 1):
+            col = f'covered_@{i}'
+            if col in df.columns:
+                hits = int(valid[col].sum())
+                s[f'row_coverage_@{i}'] = pct(hits, n_v)
+
+        s['match_type_distribution_pred1'] = (
+            df['match_type_1'].value_counts().to_dict())
+
+        rm    = self.record_wise_matrix()
+        n_rec = len(rm)
+        s['total_record_ids'] = n_rec
+        for i in range(1, k + 1):
+            col = f'fully_covered_@{i}'
+            if col in rm.columns:
+                hits = int(rm[col].sum())
+                s[f'record_fully_covered_@{i}'] = pct(hits, n_rec)
+
+        return s
+
+    def _check(self):
+        if self._eval is None:
+            raise RuntimeError('Call evaluate(main_df) first.')
+
+
+# ============================================================
+# CELL 5 — Mapping Dataset
+# Replace with: mapping_df = pd.read_csv('mapping.csv')
+# ============================================================
+mapping_data = [
+    # Complete rows
+    {'location': 'India', 'lob': 'CMB',    'legal_entity': 'RBI'},
+    {'location': 'India', 'lob': 'CMB',    'legal_entity': 'RBI'},
+    {'location': 'India', 'lob': 'CMB',    'legal_entity': 'RBI'},
+    {'location': 'India', 'lob': 'CMB',    'legal_entity': 'HDFC'},
+    {'location': 'India', 'lob': 'CMB',    'legal_entity': 'SBI'},
+    {'location': 'India', 'lob': 'Retail', 'legal_entity': 'ICICI'},
+    {'location': 'India', 'lob': 'Retail', 'legal_entity': 'ICICI'},
+    {'location': 'India', 'lob': 'Retail', 'legal_entity': 'HDFC'},
+    {'location': 'UK',    'lob': 'CMB',    'legal_entity': 'Barclays'},
+    {'location': 'UK',    'lob': 'CMB',    'legal_entity': 'Barclays'},
+    {'location': 'UK',    'lob': 'CMB',    'legal_entity': 'HSBC'},
+    {'location': 'UK',    'lob': 'Retail', 'legal_entity': 'Lloyds'},
+    {'location': 'UK',    'lob': 'Retail', 'legal_entity': 'HSBC'},
+    {'location': 'UK',    'lob': 'Retail', 'legal_entity': 'Lloyds'},
+    {'location': 'USA',   'lob': 'CMB',    'legal_entity': 'JPMorgan'},
+    {'location': 'USA',   'lob': 'CMB',    'legal_entity': 'JPMorgan'},
+    {'location': 'USA',   'lob': 'CMB',    'legal_entity': 'Citi'},
+    {'location': 'USA',   'lob': 'Retail', 'legal_entity': 'BofA'},
+    {'location': 'USA',   'lob': 'Retail', 'legal_entity': 'Wells Fargo'},
+    {'location': 'USA',   'lob': 'Retail', 'legal_entity': 'BofA'},
+    # Location-only rows (blank lob) — matches any lob for India
+    {'location': 'India', 'lob': '',       'legal_entity': 'RBI'},
+    {'location': 'India', 'lob': None,     'legal_entity': 'HDFC'},
+    # LOB-only rows (blank location) — matches any location for CMB/Retail
+    {'location': '',      'lob': 'CMB',    'legal_entity': 'BIS'},
+    {'location': None,    'lob': 'CMB',    'legal_entity': 'BIS'},
+    {'location': '',      'lob': 'Retail', 'legal_entity': 'LocalBank'},
+    # Global rows (both blank) — absolute fallback
+    {'location': '',      'lob': '',       'legal_entity': 'GlobalEntity'},
+    {'location': None,    'lob': None,     'legal_entity': 'GlobalEntity'},
+]
+mapping_df = pd.DataFrame(mapping_data)
+print(f'Mapping rows: {len(mapping_df)}')
+mapping_df
+
+
+# ============================================================
+# CELL 6 — Main / Ground-truth Dataset
+# Replace with: main_df = pd.read_csv('main.csv')
+# ===========================================================
+
+
+# ============================================================
+# CELL 6 — Main / Ground-truth Dataset
+# Replace with: main_df = pd.read_csv('main.csv')
+# ============================================================
+main_data = [
+    # R001 — single entity, exact match expected
+    {'record_id': 'R001', 'location': 'India',   'lob': 'CMB',    'legal_entity': 'RBI'},
+    # R002 — multiple legal entities across two rows
+    {'record_id': 'R002', 'location': 'UK',      'lob': 'Retail', 'legal_entity': 'Lloyds'},
+    {'record_id': 'R002', 'location': 'UK',      'lob': 'CMB',    'legal_entity': 'Barclays'},
+    # R003 — correct entity is 2nd-ranked in mapping
+    {'record_id': 'R003', 'location': 'India',   'lob': 'CMB',    'legal_entity': 'HDFC'},
+    # R004 — blank location in new data (lob-only fallback)
+    {'record_id': 'R004', 'location': None,      'lob': 'CMB',    'legal_entity': 'BIS'},
+    # R005 — blank lob in new data (location-only fallback)
+    {'record_id': 'R005', 'location': 'India',   'lob': None,     'legal_entity': 'RBI'},
+    # R006 — both blank (global fallback)
+    {'record_id': 'R006', 'location': None,      'lob': None,     'legal_entity': 'GlobalEntity'},
+    # R007 — location not in mapping (cascades to lob-only)
+    {'record_id': 'R007', 'location': 'Germany', 'lob': 'CMB',    'legal_entity': 'BIS'},
+    # R008 — neither location nor lob in mapping (rare entity)
+    {'record_id': 'R008', 'location': 'Japan',   'lob': 'SME',    'legal_entity': 'RareBank'},
+    # R009 — three legal entities for same record
+    {'record_id': 'R009', 'location': 'USA',     'lob': 'CMB',    'legal_entity': 'JPMorgan'},
+    {'record_id': 'R009', 'location': 'USA',     'lob': 'CMB',    'legal_entity': 'Citi'},
+    {'record_id': 'R009', 'location': 'USA',     'lob': 'Retail', 'legal_entity': 'BofA'},
+    # R010 — entity is 3rd-ranked in mapping
+    {'record_id': 'R010', 'location': 'India',   'lob': 'CMB',    'legal_entity': 'SBI'},
+]
+main_df = pd.DataFrame(main_data)
+print(f'Main rows: {len(main_df)}  |  Unique record_ids: {main_df["record_id"].nunique()}')
+main_df
+
+
+# ============================================================
+# CELL 7 — Build Recommender
+# ============================================================
+recommender = LegalEntityRecommender(
+    mapping_df = mapping_df,
+    main_df    = main_df,   # set to None to use only mapping frequencies
+    max_recs   = 3
+)
+
+print('Ranked lookup keys built:', len(recommender.ranked_lookup))
+print('\nSample entries from ranked_lookup:')
+for key, vals in list(recommender.ranked_lookup.items())[:6]:
+    print(f'  {key} → {vals}')
+
+
+# ============================================================
+# CELL 8 — Spot-check Recommendations
+# ============================================================
+test_cases = [
+    ('India',   'CMB',    'Exact match — expect RBI > HDFC > SBI'),
+    ('India',   None,     'Blank lob  → location-only fallback'),
+    (None,      'CMB',    'Blank loc  → lob-only fallback'),
+    (None,      None,     'Both blank → global fallback'),
+    ('Germany', 'CMB',    'Germany not in mapping → lob-only then global'),
+    ('Japan',   'SME',    'Neither in mapping → pure global'),
+    ('UK',      'Retail', 'Exact match UK Retail'),
+]
+
+spot_rows = []
+for loc, lob, note in test_cases:
+    preds, mtypes = recommender.recommend(loc, lob)
+    spot_rows.append({
+        'location':   loc,
+        'lob':        lob,
+        'pred_1':     preds[0],  'match_type_1': mtypes[0],
+        'pred_2':     preds[1],  'match_type_2': mtypes[1],
+        'pred_3':     preds[2],  'match_type_3': mtypes[2],
+        'note':       note,
+    })
+
+pd.DataFrame(spot_rows)
+
+
+# ============================================================
+# CELL 9 — Run Evaluation
+# ============================================================
+evaluator = Evaluator(recommender)
+evaluator.evaluate(main_df)
+print('Evaluation complete.')
+
+
+# ============================================================
+# CELL 10 — Summary Metrics
+# ============================================================
+summary = evaluator.summary_metrics()
+
+print('=' * 60)
+print('  SUMMARY METRICS')
+print('=' * 60)
+for k, v in summary.items():
+    print(f'  {k:<45}: {v}')
+
+
+# ============================================================
+# CELL 11 — Row-wise Matrix
+# ============================================================
+row_matrix = evaluator.row_wise_matrix()
+display(row_matrix)
+
+print('\nRow-level coverage:')
+for col in ['covered_@1', 'covered_@2', 'covered_@3']:
+    if col in row_matrix.columns:
+        n = row_matrix[col].sum()
+        t = len(row_matrix)
+        print(f'  {col}: {n}/{t}  ({n/t*100:.1f}%)')
+
+print('\nFirst correct prediction distribution:')
+print(row_matrix['first_correct_pred'].value_counts(dropna=False).sort_index())
+
+
+# ============================================================
+# CELL 12 — Record-wise Matrix
+# ============================================================
+record_matrix = evaluator.record_wise_matrix()
+display(record_matrix)
+
+print('\nRecord-level FULL coverage (all entities captured):')
+n_rec = len(record_matrix)
+for col in ['fully_covered_@1', 'fully_covered_@2', 'fully_covered_@3']:
+    if col in record_matrix.columns:
+        n = record_matrix[col].sum()
+        print(f'  {col}: {n}/{n_rec}  ({n/n_rec*100:.1f}%)')
+
+
+# ============================================================
+# CELL 13 — Class-wise Matrix
+# ============================================================
+class_matrix = evaluator.class_wise_matrix()
+display(class_matrix)
+
+
+# ============================================================
+# CELL 14 — Predict on New / Unseen Data
+# Replace with your actual new data
+# ============================================================
+new_data = pd.DataFrame([
+    {'record_id': 'N001', 'location': 'India',   'lob': 'CMB'},
+    {'record_id': 'N002', 'location': 'UK',      'lob': 'Retail'},
+    {'record_id': 'N003', 'location': None,      'lob': 'CMB'},    # blank location
+    {'record_id': 'N004', 'location': 'India',   'lob': None},     # blank lob
+    {'record_id': 'N005', 'location': None,      'lob': None},     # both blank
+    {'record_id': 'N006', 'location': 'France',  'lob': 'CMB'},    # unseen location
+])
+
+predictions = recommender.recommend_batch(new_data)
+display(predictions)
+
+
+# ============================================================
+# CELL 15 — Export Results
+# ============================================================
+row_matrix.to_csv('row_wise_matrix.csv',       index=False)
+record_matrix.to_csv('record_wise_matrix.csv', index=False)
+class_matrix.to_csv('class_wise_matrix.csv',  index=False)
+predictions.to_csv('new_data_predictions.csv', index=False)
+
+print('Exported:')
+print('  row_wise_matrix.csv')
+print('  record_wise_matrix.csv')
+print('  class_wise_matrix.csv')
+print('  new_data_predictions.csv')
+
+
+
+
 
 
 # ============================================================
