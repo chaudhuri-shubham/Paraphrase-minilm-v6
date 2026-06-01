@@ -1,0 +1,132 @@
+# ============================================================
+# CELL 1 — Imports
+# ============================================================
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.experimental import enable_halving_search_cv
+from sklearn.model_selection import HalvingRandomSearchCV
+from xgboost import XGBClassifier
+from scipy.stats import randint, uniform
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# ============================================================
+# CELL 2 — Convert Multilabel y_train to Label Powerset
+# ============================================================
+# y_train is already binary encoded (one column per LOB)
+# We combine each row's active labels into one string class
+
+y_powerset_raw = y_train.apply(
+    lambda row: '|'.join(sorted(y_train.columns[row == 1].tolist())),
+    axis=1
+)
+
+le         = LabelEncoder()
+y_powerset = le.fit_transform(y_powerset_raw)
+
+print(f"Unique label combinations : {len(np.unique(y_powerset))}")
+print("\nTop combinations by frequency:")
+print(pd.Series(y_powerset_raw).value_counts().head(10))
+
+
+# ============================================================
+# CELL 3 — Drop Rare Combinations
+# ============================================================
+
+MIN_COUNT = 3
+
+counts    = pd.Series(y_powerset).value_counts()
+valid_cls = set(counts[counts >= MIN_COUNT].index)
+mask      = np.array([y in valid_cls for y in y_powerset])
+
+X_clean   = X_train.values[mask]
+y_clean   = LabelEncoder().fit_transform(y_powerset[mask])
+
+print(f"Rows before  : {len(X_train)}")
+print(f"Rows after   : {len(X_clean)}")
+print(f"Classes kept : {len(np.unique(y_clean))}")
+
+
+# ============================================================
+# CELL 4 — Baseline
+# ============================================================
+
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+baseline = XGBClassifier(
+    n_estimators      = 100,
+    max_depth         = 6,
+    learning_rate     = 0.1,
+    use_label_encoder = False,
+    eval_metric       = 'mlogloss',
+    random_state      = 42,
+    n_jobs            = -1
+)
+
+baseline_scores = cross_val_score(
+    baseline, X_clean, y_clean,
+    cv=skf, scoring='f1_weighted', n_jobs=-1
+)
+
+print(f"Baseline F1: {baseline_scores.mean():.4f} ± {baseline_scores.std():.4f}")
+
+
+# ============================================================
+# CELL 5 — HalvingRandomSearchCV (Fast Tuning)
+# ============================================================
+
+param_dist = {
+    'n_estimators':     randint(100, 600),
+    'max_depth':        randint(3, 10),
+    'learning_rate':    uniform(0.01, 0.29),
+    'min_child_weight': randint(1, 20),
+    'subsample':        uniform(0.5, 0.5),
+    'colsample_bytree': uniform(0.3, 0.7),
+    'gamma':            uniform(0, 5),
+    'reg_alpha':        uniform(0, 5),
+    'reg_lambda':       uniform(0.1, 9.9),
+}
+
+xgb = XGBClassifier(
+    use_label_encoder = False,
+    eval_metric       = 'mlogloss',
+    random_state      = 42,
+    n_jobs            = -1
+)
+
+search = HalvingRandomSearchCV(
+    estimator           = xgb,
+    param_distributions = param_dist,
+    factor              = 3,
+    n_candidates        = 100,
+    cv                  = skf,
+    scoring             = 'f1_weighted',
+    random_state        = 42,
+    n_jobs              = -1,
+    verbose             = 1
+)
+
+search.fit(X_clean, y_clean)
+
+print(f"\nBest F1 : {search.best_score_:.4f}")
+print(f"Baseline: {baseline_scores.mean():.4f}")
+print(f"Gain    : +{search.best_score_ - baseline_scores.mean():.4f}")
+print(f"\nBest params:")
+for k, v in search.best_params_.items():
+    print(f"  {k:<25}: {round(v, 4)}")
+
+
+# ============================================================
+# CELL 6 — Top 10 Candidates
+# ============================================================
+
+results_df = (pd.DataFrame(search.cv_results_)
+              [['mean_test_score', 'std_test_score', 'n_resources', 'params']]
+              .sort_values('mean_test_score', ascending=False)
+              .head(10)
+              .reset_index(drop=True))
+
+results_df
