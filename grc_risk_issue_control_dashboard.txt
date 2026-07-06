@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Risk &rarr; Issue &rarr; Theme &rarr; Control Explorer</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:            #0B1220;
+    --panel:         #121B2E;
+    --panel-raised:  #16213A;
+    --border:        #223050;
+    --text:          #E7ECF5;
+    --text-dim:      #8FA0C0;
+    --text-faint:    #5C6C8C;
+
+    --risk:          #A78BFA;   /* violet   - risk taxonomy   */
+    --risk-soft:     rgba(167,139,250,0.14);
+    --issue:         #4F9CF9;   /* blue     - mapped issue    */
+    --issue-soft:    rgba(79,156,249,0.14);
+    --control:       #34D3A3;   /* emerald  - control         */
+    --control-soft:  rgba(52,211,163,0.14);
+    --gapAmber:      #F5A524;   /* amber    - issue with gap  */
+    --gapRed:        #F1554C;   /* red      - the gap node    */
+    --gapRed-soft:   rgba(241,85,76,0.14);
+    --theme:         #22D3EE;   /* cyan     - theme node      */
+    --theme-soft:    rgba(34,211,238,0.14);
+
+    --radius: 10px;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    overflow:hidden;
+  }
+
+  .mono{ font-family:'JetBrains Mono',monospace; }
+
+  /* ---------- Shell ---------- */
+  .app{
+    display:grid;
+    grid-template-rows:auto 1fr;
+    height:100vh;
+    width:100%;
+  }
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex; align-items:center; gap:24px;
+    padding:14px 22px;
+    border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg, var(--panel-raised), var(--panel));
+    z-index:5;
+  }
+  header .title-block{ display:flex; flex-direction:column; gap:2px; margin-right:8px; }
+  header h1{ font-size:16px; font-weight:700; margin:0; letter-spacing:0.2px; }
+  header .eyebrow{ font-size:10.5px; text-transform:uppercase; letter-spacing:1.4px; color:var(--text-faint); font-weight:600; }
+
+  .stat-chip{
+    display:flex; flex-direction:column; gap:1px;
+    padding:6px 14px; border-radius:var(--radius);
+    background:var(--panel-raised); border:1px solid var(--border);
+    min-width:78px;
+  }
+  .stat-chip .num{ font-size:17px; font-weight:700; font-family:'JetBrains Mono',monospace; }
+  .stat-chip .lbl{ font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.6px; }
+  .stat-chip.gap .num{ color:var(--gapRed); }
+  .stat-chip.ok .num{ color:var(--control); }
+
+  .header-spacer{ flex:1; }
+
+  .search-box{
+    display:flex; align-items:center; gap:8px;
+    background:var(--panel-raised); border:1px solid var(--border);
+    border-radius:999px; padding:8px 14px; min-width:230px;
+  }
+  .search-box input{ background:transparent; border:none; outline:none; color:var(--text); font-family:'Inter',sans-serif; font-size:13px; width:100%; }
+  .search-box input::placeholder{ color:var(--text-faint); }
+  .search-box svg{ flex-shrink:0; opacity:0.6; }
+
+  /* ---------- Body layout ---------- */
+  .body{
+    display:grid;
+    grid-template-columns:250px 1fr;
+    grid-template-rows:1fr;
+    min-height:0;
+    height:100%;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{ border-right:1px solid var(--border); background:var(--panel); padding:18px 16px; overflow-y:auto; }
+  .sidebar h2{ font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-faint); font-weight:700; margin:0 0 10px; }
+  .sidebar section{ margin-bottom:24px; }
+
+  .legend-row{ display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-dim); padding:5px 0; }
+  .legend-swatch{ width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+  .legend-swatch.diamond{ transform:rotate(45deg); border-radius:2px; }
+  .legend-swatch.star{ clip-path:polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+  .legend-swatch.dashed{ background:transparent; border:2px dashed var(--gapRed); }
+
+  .hint-box{
+    font-size:12px; color:var(--text-dim); line-height:1.6;
+    background:var(--panel-raised); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px;
+  }
+  .hint-box b{ color:var(--text); }
+
+  .filter-item{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-dim); padding:5px 2px; cursor:pointer; border-radius:6px; user-select:none; }
+  .filter-item:hover{ background:var(--panel-raised); }
+  .filter-item input{ accent-color:var(--issue); }
+
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    font-size:12px; font-weight:600; color:var(--text);
+    background:var(--panel-raised); border:1px solid var(--border);
+    border-radius:8px; padding:7px 10px; cursor:pointer;
+    width:100%; margin-top:6px; transition:border-color .15s;
+  }
+  .btn:hover{ border-color:var(--issue); }
+  .btn:disabled{ opacity:0.45; cursor:not-allowed; }
+  .btn.primary{ background:var(--issue); border-color:var(--issue); color:#0B1220; font-weight:700; }
+  .btn.primary:hover{ opacity:0.9; }
+
+  /* ---------- Graph canvas ---------- */
+  .canvas-wrap{ position:relative; min-width:0; min-height:0; height:100%; }
+  #graph{ width:100%; height:100%; min-height:0; background:
+      radial-gradient(circle at 20% 15%, rgba(79,156,249,0.05), transparent 40%),
+      radial-gradient(circle at 80% 85%, rgba(167,139,250,0.05), transparent 40%),
+      var(--bg);
+  }
+
+  .empty-hint{
+    position:absolute; top:16px; left:16px;
+    font-size:12px; color:var(--text-faint);
+    background:var(--panel); border:1px solid var(--border);
+    padding:8px 12px; border-radius:8px; max-width:280px; line-height:1.5;
+  }
+
+  /* ---------- Detail panel ---------- */
+  .detail-panel{
+    position:absolute; top:0; right:0; height:100%;
+    width:380px; max-width:88vw;
+    background:var(--panel);
+    border-left:1px solid var(--border);
+    transform:translateX(100%);
+    transition:transform .25s ease;
+    padding:20px 20px 24px;
+    overflow-y:auto;
+    box-shadow:-16px 0 40px rgba(0,0,0,0.35);
+  }
+  .detail-panel.open{ transform:translateX(0); }
+
+  .detail-panel .close-btn{ position:absolute; top:16px; right:16px; background:none; border:none; color:var(--text-faint); font-size:18px; cursor:pointer; line-height:1; }
+  .detail-panel .close-btn:hover{ color:var(--text); }
+
+  .pill{ display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; padding:3px 9px; border-radius:999px; margin-bottom:12px; }
+  .pill.risk{ background:var(--risk-soft); color:var(--risk); }
+  .pill.issue{ background:var(--issue-soft); color:var(--issue); }
+  .pill.control{ background:var(--control-soft); color:var(--control); }
+  .pill.gap{ background:var(--gapRed-soft); color:var(--gapRed); }
+  .pill.theme{ background:var(--theme-soft); color:var(--theme); }
+
+  .detail-panel h3{ font-size:16px; font-weight:700; margin:0 0 4px; line-height:1.35; padding-right:20px; }
+  .detail-panel .id{ font-size:11.5px; color:var(--text-faint); margin-bottom:16px; }
+
+  .field{ margin-bottom:16px; }
+  .field .k{ font-size:10.5px; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-faint); margin-bottom:4px; font-weight:600; }
+  .field .v{ font-size:13px; color:var(--text); line-height:1.55; }
+
+  .theme-tag{ display:inline-block; background:var(--panel-raised); border:1px solid var(--border); padding:3px 10px; border-radius:6px; font-size:12px; margin:2px 6px 2px 0; }
+
+  /* Selectable theme chip (issue panel) */
+  .theme-chip{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--panel-raised); border:1px solid var(--border);
+    padding:5px 12px; border-radius:999px; font-size:12px; margin:3px 6px 3px 0;
+    cursor:pointer; transition:all .15s; color:var(--text-dim);
+  }
+  .theme-chip:hover{ border-color:var(--theme); color:var(--text); }
+  .theme-chip.selected{ background:var(--theme-soft); border-color:var(--theme); color:var(--theme); font-weight:600; }
+  .theme-chip .checkmark{ font-size:11px; }
+
+  .link-card{
+    display:flex; align-items:center; gap:10px;
+    background:var(--panel-raised); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px; margin-top:6px;
+    cursor:pointer; transition:border-color .15s;
+  }
+  .link-card:hover{ border-color:var(--issue); }
+  .link-card .dot{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+  .link-card .txt{ font-size:12.5px; color:var(--text); line-height:1.4; }
+  .link-card .txt .sub{ display:block; font-size:10.5px; color:var(--text-faint); margin-top:1px; }
+
+  .gap-callout{ border:1px solid var(--gapRed); background:var(--gapRed-soft); border-radius:10px; padding:14px; margin-top:6px; }
+  .gap-callout .k{ color:var(--gapRed); font-size:10.5px; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px; }
+
+  .recommend-box{ border:1px solid var(--theme); background:var(--theme-soft); border-radius:10px; padding:14px; margin-top:6px; }
+  .recommend-box .k{ color:var(--theme); font-size:10.5px; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px; }
+  .recommend-empty{ font-size:12.5px; color:var(--text-dim); line-height:1.6; }
+
+  .rec-item{
+    display:flex; align-items:flex-start; gap:9px;
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:9px 10px; margin-bottom:8px;
+  }
+  .rec-item input{ margin-top:2px; accent-color:var(--theme); flex-shrink:0; }
+  .rec-item .txt{ font-size:12.5px; color:var(--text); line-height:1.45; }
+  .rec-item .txt .sub{ display:block; font-size:10.5px; color:var(--text-faint); margin-top:2px; }
+
+  .success-banner{
+    background:var(--control-soft); border:1px solid var(--control); color:var(--control);
+    border-radius:8px; padding:10px 12px; font-size:12.5px; font-weight:600; margin-top:10px;
+  }
+
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:8px; }
+  ::-webkit-scrollbar-track{ background:transparent; }
+
+  .cdn-error{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:40px; }
+  .cdn-error .box{ max-width:440px; background:var(--panel); border:1px solid var(--gapRed); border-radius:12px; padding:24px 26px; text-align:left; }
+  .cdn-error h3{ color:var(--gapRed); font-size:15px; margin:0 0 10px; }
+  .cdn-error p{ font-size:13px; color:var(--text-dim); line-height:1.6; margin:0 0 8px; }
+  .cdn-error code{ background:var(--panel-raised); padding:1px 6px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header>
+    <div class="title-block">
+      <span class="eyebrow">GRC &middot; Guided Exploration</span>
+      <h1>Issue &rarr; Theme &rarr; Risk &amp; Control Explorer</h1>
+    </div>
+
+    <div class="stat-chip"><span class="num mono" id="statRisks">0</span><span class="lbl">Risk Areas</span></div>
+    <div class="stat-chip"><span class="num mono" id="statIssues">0</span><span class="lbl">Issues</span></div>
+    <div class="stat-chip ok"><span class="num mono" id="statMapped">0</span><span class="lbl">Controlled</span></div>
+    <div class="stat-chip gap"><span class="num mono" id="statGaps">0</span><span class="lbl">Control Gaps</span></div>
+
+    <div class="header-spacer"></div>
+
+    <div class="search-box">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="searchInput" type="text" placeholder="Search issue, control, or ID&hellip;">
+    </div>
+  </header>
+
+  <div class="body">
+
+    <aside class="sidebar">
+      <section>
+        <h2>How this works</h2>
+        <div class="hint-box">
+          Issues with a control already appear connected to their <b>risk</b> &amp; <b>control</b>.<br><br>
+          Issues with a <b>gap</b> start disconnected. To bring one into the network:<br>
+          1. Click the gap issue<br>
+          2. Pick one of its <b>possible themes</b><br>
+          3. Click the new <b>theme node</b> to reveal similar issues<br>
+          4. Pick from the <b>recommended controls</b> and submit
+        </div>
+      </section>
+
+      <section>
+        <h2>Legend</h2>
+        <div class="legend-row"><span class="legend-swatch diamond" style="background:var(--risk)"></span> Risk Taxonomy</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--issue)"></span> Issue &mdash; controlled</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--gapAmber)"></span> Issue &mdash; has gap (isolated)</div>
+        <div class="legend-row"><span class="legend-swatch star" style="background:var(--theme)"></span> Theme (click to expand)</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:var(--control)"></span> Control</div>
+        <div class="legend-row"><span class="legend-swatch dashed"></span> Control gap</div>
+      </section>
+
+      <section>
+        <h2>Filter by Risk Taxonomy</h2>
+        <div id="riskFilters"></div>
+      </section>
+
+      <section>
+        <h2>Filter by Theme</h2>
+        <div id="themeFilters"></div>
+      </section>
+
+      <section>
+        <label class="filter-item" style="margin-bottom:6px;">
+          <input type="checkbox" id="gapsOnlyToggle"> Show control gaps only
+        </label>
+        <button class="btn" id="resetBtn">Reset exploration</button>
+        <button class="btn" id="physicsBtn">Freeze layout</button>
+      </section>
+    </aside>
+
+    <div class="canvas-wrap">
+      <div id="graph"></div>
+      <div class="empty-hint">Mapped issues already show their risk &amp; control. Click an isolated gap issue (amber) to start bringing it into the network. Drag to rearrange &middot; scroll to zoom.</div>
+
+      <div class="detail-panel" id="detailPanel">
+        <button class="close-btn" id="closeDetail">&times;</button>
+        <div id="detailBody"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* Known-benign browser quirk: ResizeObserver can report more callback cycles
+   than the browser processes in one frame. Cosmetic only; filtered here so
+   it doesn't clutter the console. */
+(function () {
+  function isResizeObserverNoise(msg) {
+    return typeof msg === 'string' && msg.indexOf('ResizeObserver loop') !== -1;
+  }
+  window.addEventListener('error', function (e) {
+    if (isResizeObserverNoise(e.message)) { e.stopImmediatePropagation(); e.preventDefault(); return false; }
+  }, true);
+  const originalConsoleError = console.error;
+  console.error = function (...args) {
+    if (args.length && isResizeObserverNoise(String(args[0]))) return;
+    originalConsoleError.apply(console, args);
+  };
+})();
+</script>
+<script>
+/* =========================================================================
+   1. DATA
+   In production, swap GRAPH_DATA for a fetch() to your backend / API, or
+   render this JSON server-side from build_dashboard.py / grc_pipeline.py.
+   The catalog contains EVERY node/edge (risk, issue, control, gap) up front;
+   the UI reveals subsets of it progressively as the user clicks through.
+   ========================================================================= */
+const GRAPH_DATA = {"nodes": [{"id": "RT-01", "label": "Operational Risk", "group": "risk", "details": {"type": "Risk Taxonomy", "id": "RT-01", "name": "Operational Risk"}}, {"id": "ISS-1001", "label": "Manual reconciliation errors in month-end close", "group": "issue", "details": {"type": "Issue", "id": "ISS-1001", "title": "Manual reconciliation errors in month-end close", "description": "Finance team performs month-end reconciliations manually in spreadsheets, leading to recurring posting errors and delayed close cycles.", "theme": "Manual Process & Automation Gaps", "possible_themes": ["Manual Process & Automation Gaps"], "risk_taxonomy": "Operational Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-501", "label": "Automated reconciliation workflow with exception reporting", "group": "control", "details": {"type": "Control", "id": "CTL-501", "title": "Automated reconciliation workflow with exception reporting", "description": "Automated reconciliation workflow with exception reporting, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1001", "linked_risk_taxonomy": "Operational Risk", "theme": "Manual Process & Automation Gaps"}}, {"id": "ISS-1002", "label": "Segregation of duties gap in payment processing", "group": "issue", "details": {"type": "Issue", "id": "ISS-1002", "title": "Segregation of duties gap in payment processing", "description": "Same user can both initiate and approve vendor payments in the ERP, creating a segregation of duties conflict.", "theme": "Access & Identity Management", "possible_themes": ["Access & Identity Management", "Third-Party Oversight"], "risk_taxonomy": "Operational Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-502", "label": "Maker-checker approval control on payment initiation", "group": "control", "details": {"type": "Control", "id": "CTL-502", "title": "Maker-checker approval control on payment initiation", "description": "Maker-checker approval control on payment initiation, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1002", "linked_risk_taxonomy": "Operational Risk", "theme": "Access & Identity Management"}}, {"id": "ISS-1003", "label": "Undocumented process for exception approvals", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1003", "title": "Undocumented process for exception approvals", "description": "Exception approvals for write-offs above threshold are handled ad hoc over email with no standard workflow or audit trail.", "theme": "Manual Process & Automation Gaps", "possible_themes": ["Manual Process & Automation Gaps"], "risk_taxonomy": "Operational Risk", "control_status": "GAP - No control mapped", "probable_control": "Introduce a system-enforced workflow with approval steps to replace the manual/email-based process."}}, {"id": "GAP-ISS-1003", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1003", "theme": "Manual Process & Automation Gaps", "probable_control": "Introduce a system-enforced workflow with approval steps to replace the manual/email-based process."}}, {"id": "ISS-1004", "label": "Backup job failures not monitored", "group": "issue", "details": {"type": "Issue", "id": "ISS-1004", "title": "Backup job failures not monitored", "description": "Nightly backup jobs for the core banking application have failed intermittently over the past quarter without alerting.", "theme": "Monitoring & Alerting", "possible_themes": ["Monitoring & Alerting"], "risk_taxonomy": "Operational Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-503", "label": "Automated backup monitoring and failure alerting", "group": "control", "details": {"type": "Control", "id": "CTL-503", "title": "Automated backup monitoring and failure alerting", "description": "Automated backup monitoring and failure alerting, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1004", "linked_risk_taxonomy": "Operational Risk", "theme": "Monitoring & Alerting"}}, {"id": "RT-02", "label": "Third-Party / Vendor Risk", "group": "risk", "details": {"type": "Risk Taxonomy", "id": "RT-02", "name": "Third-Party / Vendor Risk"}}, {"id": "ISS-1005", "label": "Vendor due diligence not refreshed periodically", "group": "issue", "details": {"type": "Issue", "id": "ISS-1005", "title": "Vendor due diligence not refreshed periodically", "description": "Critical third-party vendors have not had their due diligence questionnaires refreshed in over 24 months.", "theme": "Third-Party Oversight", "possible_themes": ["Third-Party Oversight"], "risk_taxonomy": "Third-Party / Vendor Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-504", "label": "Annual vendor due-diligence refresh cycle", "group": "control", "details": {"type": "Control", "id": "CTL-504", "title": "Annual vendor due-diligence refresh cycle", "description": "Annual vendor due-diligence refresh cycle, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1005", "linked_risk_taxonomy": "Third-Party / Vendor Risk", "theme": "Third-Party Oversight"}}, {"id": "ISS-1006", "label": "Fourth-party risk not assessed", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1006", "title": "Fourth-party risk not assessed", "description": "Vendors' own subcontractors (fourth parties) handling customer data are not identified or assessed as part of onboarding.", "theme": "Third-Party Oversight", "possible_themes": ["Third-Party Oversight"], "risk_taxonomy": "Third-Party / Vendor Risk", "control_status": "GAP - No control mapped", "probable_control": "Extend vendor risk assessment to cover subcontractor (fourth-party) data handling as part of onboarding and periodic review."}}, {"id": "GAP-ISS-1006", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1006", "theme": "Third-Party Oversight", "probable_control": "Extend vendor risk assessment to cover subcontractor (fourth-party) data handling as part of onboarding and periodic review."}}, {"id": "ISS-1007", "label": "Vendor SLA breaches not tracked centrally", "group": "issue", "details": {"type": "Issue", "id": "ISS-1007", "title": "Vendor SLA breaches not tracked centrally", "description": "Service level breaches reported by business units against key vendors are tracked in disparate local trackers, not a central register.", "theme": "Third-Party Oversight", "possible_themes": ["Third-Party Oversight"], "risk_taxonomy": "Third-Party / Vendor Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-505", "label": "Centralized vendor SLA / performance dashboard", "group": "control", "details": {"type": "Control", "id": "CTL-505", "title": "Centralized vendor SLA / performance dashboard", "description": "Centralized vendor SLA / performance dashboard, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1007", "linked_risk_taxonomy": "Third-Party / Vendor Risk", "theme": "Third-Party Oversight"}}, {"id": "ISS-1008", "label": "Offboarding of terminated vendor access delayed", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1008", "title": "Offboarding of terminated vendor access delayed", "description": "Access revocation for vendor staff after contract termination has taken up to 30 days in several instances.", "theme": "Access & Identity Management", "possible_themes": ["Access & Identity Management", "Third-Party Oversight"], "risk_taxonomy": "Third-Party / Vendor Risk", "control_status": "GAP - No control mapped", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "GAP-ISS-1008", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1008", "theme": "Access & Identity Management", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "RT-03", "label": "Cyber & Information Security Risk", "group": "risk", "details": {"type": "Risk Taxonomy", "id": "RT-03", "name": "Cyber & Information Security Risk"}}, {"id": "ISS-1009", "label": "Privileged access reviews overdue", "group": "issue", "details": {"type": "Issue", "id": "ISS-1009", "title": "Privileged access reviews overdue", "description": "Quarterly privileged/admin access recertification for core systems has been overdue for two consecutive cycles.", "theme": "Access & Identity Management", "possible_themes": ["Access & Identity Management"], "risk_taxonomy": "Cyber & Information Security Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-506", "label": "Quarterly privileged access recertification", "group": "control", "details": {"type": "Control", "id": "CTL-506", "title": "Quarterly privileged access recertification", "description": "Quarterly privileged access recertification, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1009", "linked_risk_taxonomy": "Cyber & Information Security Risk", "theme": "Access & Identity Management"}}, {"id": "ISS-1010", "label": "Shared service accounts without MFA", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1010", "title": "Shared service accounts without MFA", "description": "Several shared service accounts used by batch jobs do not have multi-factor authentication or password rotation enabled.", "theme": "Access & Identity Management", "possible_themes": ["Access & Identity Management"], "risk_taxonomy": "Cyber & Information Security Risk", "control_status": "GAP - No control mapped", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "GAP-ISS-1010", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1010", "theme": "Access & Identity Management", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "ISS-1011", "label": "Endpoint patching SLA breaches", "group": "issue", "details": {"type": "Issue", "id": "ISS-1011", "title": "Endpoint patching SLA breaches", "description": "Critical severity vulnerability patches are being applied outside the 15-day SLA on a recurring set of endpoints.", "theme": "Third-Party Oversight", "possible_themes": ["Third-Party Oversight", "Monitoring & Alerting"], "risk_taxonomy": "Cyber & Information Security Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-507", "label": "Automated patch compliance monitoring", "group": "control", "details": {"type": "Control", "id": "CTL-507", "title": "Automated patch compliance monitoring", "description": "Automated patch compliance monitoring, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1011", "linked_risk_taxonomy": "Cyber & Information Security Risk", "theme": "Third-Party Oversight"}}, {"id": "ISS-1012", "label": "Data loss prevention rules not tuned", "group": "issue", "details": {"type": "Issue", "id": "ISS-1012", "title": "Data loss prevention rules not tuned", "description": "DLP tooling generates high false-positive volumes, causing analysts to de-prioritize alerts, some of which involve sensitive data egress.", "theme": "Data Protection", "possible_themes": ["Data Protection", "Monitoring & Alerting"], "risk_taxonomy": "Cyber & Information Security Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-508", "label": "DLP rule tuning and alert triage workflow", "group": "control", "details": {"type": "Control", "id": "CTL-508", "title": "DLP rule tuning and alert triage workflow", "description": "DLP rule tuning and alert triage workflow, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1012", "linked_risk_taxonomy": "Cyber & Information Security Risk", "theme": "Data Protection"}}, {"id": "ISS-1013", "label": "Departed employee access not deprovisioned same-day", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1013", "title": "Departed employee access not deprovisioned same-day", "description": "Access deprovisioning for terminated employees is not consistently completed on the last working day across all systems.", "theme": "Access & Identity Management", "possible_themes": ["Access & Identity Management"], "risk_taxonomy": "Cyber & Information Security Risk", "control_status": "GAP - No control mapped", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "GAP-ISS-1013", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1013", "theme": "Access & Identity Management", "probable_control": "Implement automated joiner-mover-leaver access revocation tied to HR/vendor offboarding triggers."}}, {"id": "RT-04", "label": "Regulatory Compliance Risk", "group": "risk", "details": {"type": "Risk Taxonomy", "id": "RT-04", "name": "Regulatory Compliance Risk"}}, {"id": "ISS-1014", "label": "Regulatory reporting figures not independently validated", "group": "issue", "details": {"type": "Issue", "id": "ISS-1014", "title": "Regulatory reporting figures not independently validated", "description": "Key regulatory submission figures are compiled by a single analyst with no independent second-line validation before submission.", "theme": "Regulatory & Reporting", "possible_themes": ["Regulatory & Reporting"], "risk_taxonomy": "Regulatory Compliance Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-509", "label": "Independent second-line validation of regulatory filings", "group": "control", "details": {"type": "Control", "id": "CTL-509", "title": "Independent second-line validation of regulatory filings", "description": "Independent second-line validation of regulatory filings, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1014", "linked_risk_taxonomy": "Regulatory Compliance Risk", "theme": "Regulatory & Reporting"}}, {"id": "ISS-1015", "label": "Policy attestation completion rate low", "group": "issue", "details": {"type": "Issue", "id": "ISS-1015", "title": "Policy attestation completion rate low", "description": "Annual compliance policy attestation completion rate across the business fell below the 95% target this cycle.", "theme": "Regulatory & Reporting", "possible_themes": ["Regulatory & Reporting"], "risk_taxonomy": "Regulatory Compliance Risk", "control_status": "Mapped", "probable_control": null}}, {"id": "CTL-510", "label": "Automated attestation reminders and escalation", "group": "control", "details": {"type": "Control", "id": "CTL-510", "title": "Automated attestation reminders and escalation", "description": "Automated attestation reminders and escalation, operated by the process owner and evidenced through periodic testing.", "linked_issue": "ISS-1015", "linked_risk_taxonomy": "Regulatory Compliance Risk", "theme": "Regulatory & Reporting"}}, {"id": "ISS-1016", "label": "Complaints root-cause analysis not evidenced", "group": "issue_gap", "details": {"type": "Issue", "id": "ISS-1016", "title": "Complaints root-cause analysis not evidenced", "description": "Customer complaint files reviewed show resolution notes but no documented root-cause analysis or trend reporting to management.", "theme": "Regulatory & Reporting", "possible_themes": ["Regulatory & Reporting"], "risk_taxonomy": "Regulatory Compliance Risk", "control_status": "GAP - No control mapped", "probable_control": "Add a documented root-cause and trend analysis step to the existing review process."}}, {"id": "GAP-ISS-1016", "label": "No Control Mapped", "group": "gap", "details": {"type": "Control Gap", "issue_id": "ISS-1016", "theme": "Regulatory & Reporting", "probable_control": "Add a documented root-cause and trend analysis step to the existing review process."}}], "edges": [{"from": "RT-01", "to": "ISS-1001", "label": "categorized under"}, {"from": "ISS-1001", "to": "CTL-501", "label": "mitigated by"}, {"from": "RT-01", "to": "ISS-1002", "label": "categorized under"}, {"from": "ISS-1002", "to": "CTL-502", "label": "mitigated by"}, {"from": "RT-01", "to": "ISS-1003", "label": "categorized under"}, {"from": "ISS-1003", "to": "GAP-ISS-1003", "label": "control gap", "dashed": true}, {"from": "RT-01", "to": "ISS-1004", "label": "categorized under"}, {"from": "ISS-1004", "to": "CTL-503", "label": "mitigated by"}, {"from": "RT-02", "to": "ISS-1005", "label": "categorized under"}, {"from": "ISS-1005", "to": "CTL-504", "label": "mitigated by"}, {"from": "RT-02", "to": "ISS-1006", "label": "categorized under"}, {"from": "ISS-1006", "to": "GAP-ISS-1006", "label": "control gap", "dashed": true}, {"from": "RT-02", "to": "ISS-1007", "label": "categorized under"}, {"from": "ISS-1007", "to": "CTL-505", "label": "mitigated by"}, {"from": "RT-02", "to": "ISS-1008", "label": "categorized under"}, {"from": "ISS-1008", "to": "GAP-ISS-1008", "label": "control gap", "dashed": true}, {"from": "RT-03", "to": "ISS-1009", "label": "categorized under"}, {"from": "ISS-1009", "to": "CTL-506", "label": "mitigated by"}, {"from": "RT-03", "to": "ISS-1010", "label": "categorized under"}, {"from": "ISS-1010", "to": "GAP-ISS-1010", "label": "control gap", "dashed": true}, {"from": "RT-03", "to": "ISS-1011", "label": "categorized under"}, {"from": "ISS-1011", "to": "CTL-507", "label": "mitigated by"}, {"from": "RT-03", "to": "ISS-1012", "label": "categorized under"}, {"from": "ISS-1012", "to": "CTL-508", "label": "mitigated by"}, {"from": "RT-03", "to": "ISS-1013", "label": "categorized under"}, {"from": "ISS-1013", "to": "GAP-ISS-1013", "label": "control gap", "dashed": true}, {"from": "RT-04", "to": "ISS-1014", "label": "categorized under"}, {"from": "ISS-1014", "to": "CTL-509", "label": "mitigated by"}, {"from": "RT-04", "to": "ISS-1015", "label": "categorized under"}, {"from": "ISS-1015", "to": "CTL-510", "label": "mitigated by"}, {"from": "RT-04", "to": "ISS-1016", "label": "categorized under"}, {"from": "ISS-1016", "to": "GAP-ISS-1016", "label": "control gap", "dashed": true}]};
+
+/* =========================================================================
+   2. STYLE MAP per node group
+   ========================================================================= */
+const STYLE = {
+  risk:      { shape:'diamond', color:{background:'#A78BFA', border:'#C4B5FD'}, size:24, font:{color:'#E7ECF5', size:13, face:'Inter', bold:true} },
+  issue:     { shape:'dot',     color:{background:'#4F9CF9', border:'#8FC1FF'}, size:16, font:{color:'#C9D6EC', size:11.5, face:'Inter'} },
+  issue_gap: { shape:'dot',     color:{background:'#F5A524', border:'#FBD097'}, size:16, font:{color:'#C9D6EC', size:11.5, face:'Inter'} },
+  control:   { shape:'box',     color:{background:'#173B2E', border:'#34D3A3'}, size:14, font:{color:'#C9D6EC', size:11, face:'Inter'} },
+  gap:       { shape:'triangle',color:{background:'#3A1613', border:'#F1554C'}, size:13, font:{color:'#F1554C', size:10.5, face:'Inter'} },
+  theme:     { shape:'star',    color:{background:'#0E4A55', border:'#22D3EE'}, size:20, font:{color:'#22D3EE', size:12, face:'Inter', bold:true} },
+};
+
+function makeVisNode(n){
+  const s = STYLE[n.group];
+  const showIdAsLabel = (n.group === 'issue' || n.group === 'issue_gap' || n.group === 'control');
+  const base = {
+    id: n.id,
+    label: showIdAsLabel ? n.id : n.label,
+    title: n.label,
+    _raw: n,
+    borderWidth: 2,
+  };
+  if (n.group === 'gap'){ base.shapeProperties = { borderDashes: [4,3] }; }
+  return Object.assign(base, s);
+}
+
+function themeNodeId(themeName){ return 'THEME::' + themeName; }
+
+function makeThemeVisNode(themeName){
+  return Object.assign({
+    id: themeNodeId(themeName),
+    label: themeName,
+    title: themeName + ' (theme)',
+    _raw: { id: themeNodeId(themeName), group:'theme', label:themeName, details:{ type:'Theme', name:themeName } },
+    borderWidth: 2,
+  }, STYLE.theme);
+}
+
+function initApp(){
+
+const nodesDS = new vis.DataSet([]);
+const edgesDS = new vis.DataSet([]);
+
+/* Base network at load time:
+   - MAPPED issues appear already connected to their Risk Taxonomy and Control
+     (this is the "already in the network" state).
+   - GAP issues appear as isolated nodes with no edges at all - they are
+     "outside the network" until the user tags a theme, expands it to find
+     similar issues, and submits a recommended control (see section 5). */
+GRAPH_DATA.nodes
+  .filter(n => n.group === 'issue' || n.group === 'issue_gap')
+  .forEach(n => nodesDS.add(makeVisNode(n)));
+
+/* =========================================================================
+   3. NETWORK
+   ========================================================================= */
+const container = document.getElementById('graph');
+const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+  layout:{ improvedLayout:true },
+  interaction:{ hover:true, tooltipDelay:120 },
+  physics:{
+    solver:'forceAtlas2Based',
+    forceAtlas2Based:{ gravitationalConstant:-70, springLength:120, springConstant:0.06, avoidOverlap:0.6 },
+    stabilization:{ iterations:150 },
+  },
+  nodes:{ borderWidthSelected:3 },
+  edges:{ arrows:{ to:{enabled:true, scaleFactor:0.5} } },
+});
+
+/* =========================================================================
+   4. RUNTIME STATE
+   ========================================================================= */
+const selectedThemesByIssue = {};   // issueId -> Set(themeName)
+const resolvedGaps = new Set();     // issueIds that had a recommendation submitted
+let dynamicResolvedCount = 0;const totalRisks   = GRAPH_DATA.nodes.filter(n => n.group === 'risk').length;
+const totalIssues  = GRAPH_DATA.nodes.filter(n => n.group === 'issue' || n.group === 'issue_gap').length;
+const baseMapped   = GRAPH_DATA.nodes.filter(n => n.group === 'control').length;
+const baseGaps     = GRAPH_DATA.nodes.filter(n => n.group === 'gap').length;
+
+function refreshStats(){
+  document.getElementById('statRisks').textContent  = totalRisks;
+  document.getElementById('statIssues').textContent = totalIssues;
+  document.getElementById('statMapped').textContent = baseMapped + dynamicResolvedCount;
+  document.getElementById('statGaps').textContent   = Math.max(0, baseGaps - dynamicResolvedCount);
+}
+refreshStats();
+
+/* =========================================================================
+   5. GRAPH-BUILDING HELPERS
+   ========================================================================= */
+function ensureCatalogNode(id){
+  if (nodesDS.get(id)) return;
+  const raw = GRAPH_DATA.nodes.find(n => n.id === id);
+  if (raw) nodesDS.add(makeVisNode(raw));
+}
+
+function ensureEdge(fromId, toId, opts){
+  const id = fromId + '__' + toId;
+  if (edgesDS.get(id)) return;
+  edgesDS.add(Object.assign({
+    id, from: fromId, to: toId,
+    color:{ color:'rgba(143,160,192,0.35)', highlight:'#4F9CF9' },
+    width: 1,
+    smooth:{ type:'continuous', roundness:0.4 },
+  }, opts || {}));
+}
+
+function issueRiskEdge(issueId){ return GRAPH_DATA.edges.find(e => e.to === issueId && e.label === 'categorized under'); }
+function issueControlEdge(issueId){ return GRAPH_DATA.edges.find(e => e.from === issueId && e.label === 'mitigated by'); }
+function issueGapEdge(issueId){ return GRAPH_DATA.edges.find(e => e.from === issueId && e.label === 'control gap'); }
+
+function issuesForTheme(themeName){
+  return GRAPH_DATA.nodes.filter(n =>
+    (n.group === 'issue' || n.group === 'issue_gap') &&
+    n.details && (n.details.theme === themeName || (n.details.possible_themes || []).includes(themeName))
+  );
+}
+
+function revealIssueRiskAndControl(issueId){
+  const rEdge = issueRiskEdge(issueId);
+  if (rEdge){ ensureCatalogNode(rEdge.from); ensureEdge(rEdge.from, rEdge.to, { color:{color:'rgba(167,139,250,0.4)', highlight:'#A78BFA'} }); }
+
+  const cEdge = issueControlEdge(issueId);
+  if (cEdge){
+    ensureCatalogNode(cEdge.to);
+    ensureEdge(cEdge.from, cEdge.to, { color:{color:'rgba(52,211,163,0.45)', highlight:'#34D3A3'} });
+    return;
+  }
+  const gEdge = issueGapEdge(issueId);
+  if (gEdge && !resolvedGaps.has(issueId)){
+    ensureCatalogNode(gEdge.to);
+    ensureEdge(gEdge.from, gEdge.to, { dashes:true, color:{color:'rgba(241,85,76,0.55)', highlight:'#F1554C'} });
+  }
+}
+
+function toggleThemeForIssue(issueId, themeName, chipEl){
+  const tId = themeNodeId(themeName);
+  if (!selectedThemesByIssue[issueId]) selectedThemesByIssue[issueId] = new Set();
+  const set = selectedThemesByIssue[issueId];
+  const edgeId = issueId + '__' + tId;
+
+  if (set.has(themeName)){
+    set.delete(themeName);
+    edgesDS.remove(edgeId);
+    const stillUsed = edgesDS.get({ filter: e => e.from === tId || e.to === tId }).length > 0;
+    if (!stillUsed) nodesDS.remove(tId);
+    if (chipEl) chipEl.classList.remove('selected');
+  } else {
+    set.add(themeName);
+    if (!nodesDS.get(tId)) nodesDS.add(makeThemeVisNode(themeName));
+    ensureEdge(issueId, tId, { color:{color:'rgba(34,211,238,0.45)', highlight:'#22D3EE'} });
+    if (chipEl) chipEl.classList.add('selected');
+  }
+}
+
+function expandTheme(themeName){
+  const tId = themeNodeId(themeName);
+  const similar = issuesForTheme(themeName);
+  similar.forEach(issueNode => {
+    ensureCatalogNode(issueNode.id);
+    ensureEdge(tId, issueNode.id, { color:{color:'rgba(34,211,238,0.35)', highlight:'#22D3EE'} });
+    revealIssueRiskAndControl(issueNode.id);
+  });
+}
+
+function computeRecommendedControls(issueId, themeSet){
+  const recs = new Map(); // controlId -> {controlNode, viaIssues:[]}
+  themeSet.forEach(themeName => {
+    issuesForTheme(themeName).forEach(sim => {
+      if (sim.id === issueId || sim.group !== 'issue') return;
+      const cEdge = issueControlEdge(sim.id);
+      if (!cEdge) return;
+      const ctlNode = GRAPH_DATA.nodes.find(n => n.id === cEdge.to);
+      if (!ctlNode) return;
+      if (!recs.has(ctlNode.id)) recs.set(ctlNode.id, { controlNode: ctlNode, viaIssues: [] });
+      recs.get(ctlNode.id).viaIssues.push(sim);
+    });
+  });
+  return Array.from(recs.values());
+}
+
+function submitRecommendation(issueId, selectedControlIds){
+  selectedControlIds.forEach(ctlId => {
+    ensureCatalogNode(ctlId);
+    ensureEdge(issueId, ctlId, { color:{color:'rgba(52,211,163,0.5)', highlight:'#34D3A3'} });
+  });
+  const gEdge = issueGapEdge(issueId);
+  if (gEdge){ edgesDS.remove(issueId + '__' + gEdge.to); nodesDS.remove(gEdge.to); }
+
+  // Now fully "in the network": also connect its own risk taxonomy, same as
+  // any already-mapped issue gets by default.
+  const rEdge = issueRiskEdge(issueId);
+  if (rEdge){ ensureCatalogNode(rEdge.from); ensureEdge(rEdge.from, rEdge.to, { color:{color:'rgba(167,139,250,0.4)', highlight:'#A78BFA'} }); }
+
+  nodesDS.update(Object.assign({ id: issueId }, STYLE.issue));
+
+  resolvedGaps.add(issueId);
+  dynamicResolvedCount += 1;
+  refreshStats();
+}
+
+/* Populate the base network: every already-mapped issue starts already
+   connected to its Risk Taxonomy and Control. Gap issues are deliberately
+   left with no edges - they start "outside the network" until resolved
+   through the theme -> similar issues -> risk/control -> recommend flow. */
+GRAPH_DATA.nodes
+  .filter(n => n.group === 'issue')
+  .forEach(n => revealIssueRiskAndControl(n.id));
+
+/* =========================================================================
+   6. DETAIL PANEL RENDERING
+   ========================================================================= */
+const panel = document.getElementById('detailPanel');
+const body  = document.getElementById('detailBody');
+
+function colorDotFor(group){
+  return { risk:'var(--risk)', issue:'var(--issue)', issue_gap:'var(--gapAmber)', control:'var(--control)', gap:'var(--gapRed)', theme:'var(--theme)' }[group] || '#888';
+}
+
+function field(label, value){
+  return `<div class="field"><div class="k">${label}</div><div class="v">${value}</div></div>`;
+}
+
+function linkCard(rawNode){
+  const sub = { risk:'Risk taxonomy', issue:'Issue', issue_gap:'Issue &middot; gap', control:'Control', gap:'Control gap', theme:'Theme' }[rawNode.group];
+  return `<div class="link-card" data-nav="${rawNode.id}">
+            <span class="dot" style="background:${colorDotFor(rawNode.group)}"></span>
+            <span class="txt">${rawNode.label}<span class="sub mono">${rawNode.id} &middot; ${sub}</span></span>
+          </div>`;
+}
+
+function activateNode(id){
+  ensureCatalogNode(id);
+  const node = nodesDS.get(id);
+  if (!node) return;
+  network.selectNodes([id]);
+  network.focus(id, { scale:1.0, animation:{ duration:400 } });
+  dispatchClick(node._raw);
+}
+
+function attachNavHandlers(){
+  body.querySelectorAll('[data-nav]').forEach(el => {
+    el.addEventListener('click', () => activateNode(el.getAttribute('data-nav')));
+  });
+}
+
+function renderIssuePanel(raw){
+  const d = raw.details;
+  const isGap = raw.group === 'issue_gap' && !resolvedGaps.has(raw.id);
+  let html = `<span class="pill issue">Issue</span>`;
+  html += `<h3>${d.title}</h3><div class="id mono">${d.id}</div>`;
+  html += field('Description', d.description);
+
+  const selected = selectedThemesByIssue[raw.id] || new Set();
+  const possible = (d.possible_themes && d.possible_themes.length) ? d.possible_themes : [d.theme];
+  html += `<div class="field"><div class="k">${possible.length > 1 ? 'Possible themes - click to tag' : 'Theme - click to tag'}</div><div class="v">`;
+  possible.forEach(t => {
+    const isSel = selected.has(t);
+    html += `<span class="theme-chip ${isSel ? 'selected' : ''}" data-theme="${t}" data-issue="${raw.id}">${isSel ? '<span class="checkmark">&#10003;</span>' : ''}${t}</span>`;
+  });
+  html += `</div></div>`;
+
+  if (resolvedGaps.has(raw.id)){
+    html += `<div class="success-banner">&#10003; Control recommendation submitted for this issue.</div>`;
+  } else if (isGap){
+    html += `<div class="gap-callout"><div class="k">&#9888; No control mapped</div><div id="recWrap"></div></div>`;
+  } else {
+    const cEdge = issueControlEdge(raw.id);
+    if (cEdge){
+      html += `<div class="field"><div class="k">Control status</div><div class="v" style="color:var(--control); font-weight:600;">&#10003; Mapped to a control</div></div>`;
+    }
+  }
+
+  body.innerHTML = html;
+  panel.classList.add('open');
+
+  body.querySelectorAll('.theme-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      toggleThemeForIssue(raw.id, chip.getAttribute('data-theme'), chip);
+      if (isGap) renderRecommendations(raw.id);
+    });
+  });
+
+  if (isGap) renderRecommendations(raw.id);
+  attachNavHandlers();
+}
+
+function renderRecommendations(issueId){
+  const wrap = document.getElementById('recWrap');
+  if (!wrap) return;
+  const themeSet = selectedThemesByIssue[issueId] || new Set();
+
+  if (themeSet.size === 0){
+    wrap.innerHTML = `<div class="recommend-empty">Tag at least one theme above to see recommended controls drawn from similar issues.</div>`;
+    return;
+  }
+
+  const recs = computeRecommendedControls(issueId, themeSet);
+  if (recs.length === 0){
+    wrap.innerHTML = `<div class="recommend-empty">No similar issue under the selected theme(s) has a mapped control yet.</div>`;
+    return;
+  }
+
+  let html = `<div class="recommend-box"><div class="k">Recommended controls</div>`;
+  recs.forEach(r => {
+    const viaLabel = r.viaIssues.map(i => i.id).join(', ');
+    html += `<label class="rec-item">
+               <input type="checkbox" class="rec-cb" value="${r.controlNode.id}">
+               <span class="txt">${r.controlNode.label}<span class="sub mono">${r.controlNode.id} &middot; via ${viaLabel}</span></span>
+             </label>`;
+  });
+  html += `<button class="btn primary" id="submitRecBtn">Submit selected control(s)</button></div>`;
+  wrap.innerHTML = html;
+
+  document.getElementById('submitRecBtn').addEventListener('click', () => {
+    const chosen = Array.from(wrap.querySelectorAll('.rec-cb:checked')).map(cb => cb.value);
+    if (chosen.length === 0){ alert('Select at least one recommended control before submitting.'); return; }
+    submitRecommendation(issueId, chosen);
+    renderIssuePanel(nodesDS.get(issueId)._raw);
+  });
+}
+
+function renderThemePanel(raw){
+  const themeName = raw.details.name;
+  expandTheme(themeName);
+  const similar = issuesForTheme(themeName);
+
+  let html = `<span class="pill theme">Theme</span>`;
+  html += `<h3>${themeName}</h3>`;
+  html += `<div class="field"><div class="k">Similar issues (${similar.length})</div></div>`;
+  similar.forEach(iss => { html += linkCard(iss); });
+
+  body.innerHTML = html;
+  panel.classList.add('open');
+  attachNavHandlers();
+}
+
+function renderRiskPanel(raw){
+  const d = raw.details;
+  let html = `<span class="pill risk">Risk Taxonomy</span>`;
+  html += `<h3>${d.name}</h3><div class="id mono">${d.id}</div>`;
+  const related = GRAPH_DATA.edges.filter(e => e.from === d.id).map(e => GRAPH_DATA.nodes.find(n => n.id === e.to));
+  html += `<div class="field"><div class="k">Issues under this risk (${related.length})</div></div>`;
+  related.forEach(iss => { html += linkCard(iss); });
+  body.innerHTML = html;
+  panel.classList.add('open');
+  attachNavHandlers();
+}
+
+function renderControlPanel(raw){
+  const d = raw.details;
+  let html = `<span class="pill control">Control</span>`;
+  html += `<h3>${d.title}</h3><div class="id mono">${d.id}</div>`;
+  html += field('Description', d.description);
+  html += `<div class="field"><div class="k">Theme</div><div class="v theme-tag">${d.theme}</div></div>`;
+  const issueNode = GRAPH_DATA.nodes.find(n => n.id === d.linked_issue);
+  html += `<div class="field"><div class="k">Mitigates issue</div>`;
+  if (issueNode) html += linkCard(issueNode);
+  html += `</div>`;
+  html += field('Risk taxonomy', d.linked_risk_taxonomy);
+  body.innerHTML = html;
+  panel.classList.add('open');
+  attachNavHandlers();
+}
+
+function dispatchClick(raw){
+  switch(raw.group){
+    case 'issue': case 'issue_gap': renderIssuePanel(raw); break;
+    case 'theme': renderThemePanel(raw); break;
+    case 'risk':  renderRiskPanel(raw); break;
+    case 'control': renderControlPanel(raw); break;
+    case 'gap': {
+      const issueId = raw.details.issue_id;
+      activateNode(issueId);
+      break;
+    }
+  }
+}
+
+network.on('click', params => {
+  if (params.nodes.length){
+    const node = nodesDS.get(params.nodes[0]);
+    dispatchClick(node._raw);
+  } else {
+    panel.classList.remove('open');
+  }
+});
+
+document.getElementById('closeDetail').addEventListener('click', () => panel.classList.remove('open'));
+
+/* =========================================================================
+   7. SIDEBAR: filters
+   ========================================================================= */
+const riskList  = [...new Set(GRAPH_DATA.nodes.filter(n=>n.group==='risk').map(n=>n.label))];
+const themeList = [...new Set(GRAPH_DATA.nodes.filter(n=>n.details && n.details.theme).map(n=>n.details.theme))].sort();
+
+const riskFiltersEl = document.getElementById('riskFilters');
+riskList.forEach(r => {
+  riskFiltersEl.insertAdjacentHTML('beforeend', `<label class="filter-item"><input type="checkbox" class="risk-cb" value="${r}" checked> ${r}</label>`);
+});
+
+const themeFiltersEl = document.getElementById('themeFilters');
+themeList.forEach(t => {
+  themeFiltersEl.insertAdjacentHTML('beforeend', `<label class="filter-item"><input type="checkbox" class="theme-cb" value="${t}" checked> ${t}</label>`);
+});
+
+function applyFilters(){
+  const activeRisks  = [...document.querySelectorAll('.risk-cb:checked')].map(el => el.value);
+  const activeThemes = [...document.querySelectorAll('.theme-cb:checked')].map(el => el.value);
+  const gapsOnly = document.getElementById('gapsOnlyToggle').checked;
+  const query = document.getElementById('searchInput').value.trim().toLowerCase();
+
+  nodesDS.forEach(n => {
+    const raw = n._raw;
+    const d = raw.details || {};
+    let visible = true;
+    const rt = d.risk_taxonomy || d.name || d.linked_risk_taxonomy;
+    if (raw.group !== 'risk' && raw.group !== 'theme'){
+      if (rt && !activeRisks.includes(rt)) visible = false;
+      if (d.theme && !activeThemes.includes(d.theme)) visible = false;
+    }
+    if (gapsOnly && !(raw.group === 'gap' || raw.group === 'issue_gap')) visible = false;
+    if (query){
+      const hay = (n.label + ' ' + n.id + ' ' + (d.description||'')).toLowerCase();
+      if (!hay.includes(query)) visible = false;
+    }
+    if (raw.group === 'risk' || raw.group === 'theme') visible = true;
+    nodesDS.update({ id: n.id, hidden: !visible });
+  });
+
+  edgesDS.forEach(e => {
+    const fromNode = nodesDS.get(e.from), toNode = nodesDS.get(e.to);
+    const bothVisible = fromNode && toNode && !fromNode.hidden && !toNode.hidden;
+    edgesDS.update({ id: e.id, hidden: !bothVisible });
+  });
+}
+
+document.querySelectorAll('.risk-cb, .theme-cb').forEach(el => el.addEventListener('change', applyFilters));
+document.getElementById('gapsOnlyToggle').addEventListener('change', applyFilters);
+document.getElementById('searchInput').addEventListener('input', applyFilters);
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  document.querySelectorAll('.risk-cb, .theme-cb').forEach(el => el.checked = true);
+  document.getElementById('gapsOnlyToggle').checked = false;
+  document.getElementById('searchInput').value = '';
+  panel.classList.remove('open');
+
+  nodesDS.clear();
+  edgesDS.clear();
+  Object.keys(selectedThemesByIssue).forEach(k => delete selectedThemesByIssue[k]);
+  resolvedGaps.clear();
+  dynamicResolvedCount = 0;
+  refreshStats();
+
+  GRAPH_DATA.nodes
+    .filter(n => n.group === 'issue' || n.group === 'issue_gap')
+    .forEach(n => nodesDS.add(makeVisNode(n)));
+  GRAPH_DATA.nodes
+    .filter(n => n.group === 'issue')
+    .forEach(n => revealIssueRiskAndControl(n.id));
+
+  network.fit({ animation:true });
+});
+
+let physicsOn = true;
+document.getElementById('physicsBtn').addEventListener('click', (e) => {
+  physicsOn = !physicsOn;
+  network.setOptions({ physics:{ enabled: physicsOn } });
+  e.target.textContent = physicsOn ? 'Freeze layout' : 'Resume layout';
+});
+
+} // end initApp()
+
+/* =========================================================================
+   8. RESILIENT LIBRARY LOADER
+   Tries a couple of different CDNs in turn (some networks/firewalls block
+   one but not another). Only calls initApp() once vis-network has actually
+   loaded; shows a clear message in place of a blank/broken page if every
+   source is unreachable, instead of throwing "vis is not defined".
+   ========================================================================= */
+const VIS_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/vis-network/10.0.2/standalone/umd/vis-network.min.js',
+  'https://cdn.jsdelivr.net/npm/vis-network@10.0.2/standalone/umd/vis-network.min.js',
+  'https://unpkg.com/vis-network@10.0.2/standalone/umd/vis-network.min.js',
+];
+
+function loadVis(sourceIndex){
+  if (sourceIndex >= VIS_SOURCES.length){
+    document.getElementById('graph').innerHTML = `
+      <div class="cdn-error">
+        <div class="box">
+          <h3>Graph library couldn't load</h3>
+          <p>This page loads its charting library (<code>vis-network</code>) from a public CDN at
+          open time. All CDN sources were unreachable from this browser/network just now.</p>
+          <p>Things to try: open this file with an active internet connection, check whether your
+          network or firewall blocks <code>cdnjs.cloudflare.com</code>, <code>jsdelivr.net</code>, and
+          <code>unpkg.com</code>, or try a different browser/network.</p>
+        </div>
+      </div>`;
+    return;
+  }
+  const s = document.createElement('script');
+  s.src = VIS_SOURCES[sourceIndex];
+  s.onload = () => {
+    if (typeof vis === 'undefined'){ loadVis(sourceIndex + 1); return; }
+    try { initApp(); } catch(err){
+      console.error('Graph init failed:', err);
+      document.getElementById('graph').innerHTML =
+        '<div class="cdn-error"><div class="box"><h3>Something went wrong rendering the graph</h3><p>' +
+        (err && err.message ? err.message : 'Unknown error') + '</p></div></div>';
+    }
+  };
+  s.onerror = () => loadVis(sourceIndex + 1);
+  document.head.appendChild(s);
+}
+
+loadVis(0);
+</script>
+</body>
+</html> 
