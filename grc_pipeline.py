@@ -275,4 +275,4 @@ if __name__ == "__main__":
     total_issues = len(df)
     gaps = df["control_id"].isna().sum()
     print(f"Issues: {total_issues} | Controls mapped: {total_issues - gaps} | Gaps: {gaps}")
-    print(df[["issue_id", "risk_taxonomy", "theme", "control_id"]].to_string(index=False))
+    print(df[["issue_id", "risk_taxonomy", "theme", "control_id"]].to_string(index=False)) 
