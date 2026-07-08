@@ -1,3 +1,16 @@
+How to use your own data:
+Open grc_network_explorer.html in your browser
+Click "Load CSV" in the header
+Pick a CSV from your computer with these columns: issue_id, issue_title, issue_details, risk_id, risk_taxonomy, control_id, control_title, control_details (leave the last three blank for gap issues) — dummy_grc_data.csv is a ready reference for the format
+The whole graph rebuilds instantly with your data, back in the "Guided" single-node view, no page reload needed
+
+
+
+
+
+
+
+
 Cell 1 — Install
 !pip install openai pandas openpyxl -q
 Cell 2 — Config
