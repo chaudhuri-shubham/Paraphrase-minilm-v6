@@ -1,0 +1,52 @@
+Required CSV columns (case-sensitive):
+     issue_id, issue_title, issue_details,
+     risk_id, risk_taxonomy,
+     control_id, control_title, control_details   (leave blank = control gap)
+   ========================================================================= */
+const DEMO_CSV = `issue_id,issue_title,issue_details,risk_id,risk_taxonomy,control_id,control_title,control_details
+
+
+
+
+2.
+
+Required CSV columns (case-sensitive):
+     issue_id, issue_title, issue_details,
+     risk_id, risk_taxonomy,
+     control_id, control_title, control_details   (leave blank = control gap)
+
+   Optional columns:
+     theme            - if present and non-blank, used as-is instead of
+                         auto-detecting a theme from issue_details.
+     possible_themes   - pipe-separated (e.g. "Access|Third-Party"), used
+                         alongside "theme" if present. If omitted, only the
+                         fixed "theme" value is used.
+   ========================================================================= */
+const DEMO_CSV = `issue_id,issue_title,issue_details,risk_id,risk_taxonomy,control_id,control_title,control_details
+
+
+3. 
+const { primary: theme, possible: possibleThemes } = tagTheme(row.issue_details);
+    const probable = PROBABLE_CONTROL_BY_THEME[theme] || DEFAULT_PROBABLE_CONTROL;
+
+
+-----
+
+// Prefer a fixed theme from the data itself. If the row has a non-blank
+    // "theme" column, use it as-is (and "possible_themes", pipe-separated,
+    // if present). Only rows without one fall back to keyword detection.
+    const providedTheme = (row.theme || '').trim();
+    let theme, possibleThemes;
+    if (providedTheme){
+      theme = providedTheme;
+      const providedPossible = (row.possible_themes || '').trim();
+      possibleThemes = providedPossible
+        ? providedPossible.split('|').map(s => s.trim()).filter(Boolean)
+        : [providedTheme];
+      if (!possibleThemes.includes(theme)) possibleThemes.unshift(theme);
+    } else {
+      const tagged = tagTheme(row.issue_details);
+      theme = tagged.primary;
+      possibleThemes = tagged.possible;
+    }
+    const probable = PROBABLE_CONTROL_BY_THEME[theme] || DEFAULT_PROBABLE_CONTROL;
