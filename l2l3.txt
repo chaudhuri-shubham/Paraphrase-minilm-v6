@@ -110,3 +110,61 @@ Return exactly 5 objects in the array, ranked from strongest match (index 0) to 
 Output the JSON array now, with no other text.
 """.strip()
 
+
+""""""""""""
+
+prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+Analyse the Regulatory Text and recommend the FIVE most relevant Level 3 Risk Taxonomy values, drawing from the Level 2 candidates and Reference Schema provided.
+
+You will be given:
+1) Regulatory Text (reg_text)
+2) Pre-tagged Level 2 taxonomy candidates (given_l2) - these came from an upstream model and are NOT confirmed; typically only ONE of them is actually correct
+3) Reference Schema (authoritative list of valid Level 3 options, grouped under each Level 2 candidate)
+
+Method (follow internally before answering, do not include this in the output):
+Step 1 - Identify the core regulatory obligation or failure described in the text (who owed what to whom, what went wrong).
+Step 2 - Evaluate EACH Level 2 group SEPARATELY and independently, as if it were the only candidate under consideration:
+   - For each Level 2 group, go through its Level 3 options and judge fit against Step 1, ignoring the other Level 2 groups entirely for this step.
+   - Assign each Level 2 group an overall "branch fit" judgment: how well does this Level 2 category itself actually describe the text, independent of which specific Level 3 fits best under it?
+Step 3 - Now compare ACROSS the Level 2 groups using their branch fit judgments from Step 2. It is very likely that only one Level 2 branch is actually correct - identify which one(s) genuinely fit and discard entire branches that only matched on surface keywords or generic overlap.
+Step 4 - Pull the final 5 Level 3 recommendations from the surviving branch(es) only. Do not force representation from every Level 2 group - a single correct branch may supply all 5, or even all except 1-2 if a secondary branch is also plausible.
+Step 5 - SELF-CHECK before finalizing: for each of your 5 picks, confirm its parent Level 2 branch was actually judged a good/surviving fit in Step 3. If any pick comes from a branch you judged weak, replace it with the next-best candidate from a surviving branch, or lower its confidence sharply and say so in its reasoning if no better option exists. Also confirm you have NOT distributed picks evenly across branches purely out of caution - re-examine any output where each Level 2 group contributed a suspiciously equal number of picks (e.g. exactly 1-2 each across 3 groups), since that pattern often signals hedging rather than genuine independent judgment.
+
+Rules:
+- Select Level 3 values ONLY from the Reference Schema below.
+- Return Level 3 values EXACTLY as written (case and spacing).
+- Do NOT default to picking roughly equal numbers of L3s from each L2 group - that is the mistake this task is specifically designed to avoid. Confidence and selection should reflect actual branch-level fit, not balanced representation.
+- If a Level 2 group's branch fit is weak, its Level 3 candidates should receive low confidence scores or be excluded entirely, even if no other candidate from that branch was picked.
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+Target Level 2 Candidates (ranked, given_l2):
+{", ".join(level2_inputs)}
+
+### Reference Schema (grouped by Level 2 candidate; allowed Level 3 values) ###
+{schema_str}
+
+### Output requirements ###
+- Return EXACTLY 5 Level 3 recommendations (ranked best to weakest), after completing the Step 5 self-check.
+- For EACH recommendation, provide:
+  - level_3: exact Level 3 string from the schema
+  - confidence: float from 0.00 to 1.00
+    - 0.00 = low confidence / weak match
+    - 1.00 = very confident / strong match
+  - reasoning: 1-2 sentences explaining why the text fits this specific Level 3, AND briefly noting why its parent Level 2 branch survived Step 3 and passed the Step 5 self-check
+- Give a SEPARATE reasoning for EACH recommendation. Do not combine reasoning across recommendations.
+
+Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object):
+[
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+]
+""".strip()
