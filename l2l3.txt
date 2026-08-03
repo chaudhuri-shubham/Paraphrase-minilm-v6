@@ -168,3 +168,207 @@ Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object):
   {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
 ]
 """.strip()
+
+
+
+###################
+
+def create_per_l2_prompt(reg_text: str, l2_value: str, df_mapping: pd.DataFrame) -> tuple[str, list]:
+    filtered_map = df_mapping[df_mapping["risk_taxonomy_l2"] == l2_value]
+    allowed_l3_for_branch = (
+        filtered_map["risk_taxonomy_l3"]
+        .dropna()
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+
+    schema_str = "\n".join(f"- {v}" for v in allowed_l3_for_branch) if allowed_l3_for_branch else \
+        "(No Level 3 options found for this Level 2.)"
+
+    prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+Analyse the Regulatory Text and recommend the THREE most relevant Level 3 Risk Taxonomy values, assuming the text belongs to the given Level 2 category below.
+
+Method (follow internally before answering, do not include this in the output):
+Step 1 - Identify the core regulatory obligation or failure described in the text.
+Step 2 - For each Level 3 option below, judge whether its meaning genuinely matches that obligation/failure, not just shared keywords.
+Step 3 - Score each option on how well it fits, treating this Level 2 category as if it were the confirmed correct one.
+Step 4 - Select and rank the top 3.
+
+Rules:
+- Select Level 3 values ONLY from the Reference Schema below.
+- Return Level 3 values EXACTLY as written (case and spacing).
+- Score confidence honestly - if NONE of the options fit well even under this assumed Level 2, give low confidence scores rather than forcing a strong-sounding match.
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+Assumed Level 2 Category:
+{l2_value}
+
+### Reference Schema (allowed Level 3 values under this Level 2) ###
+{schema_str}
+
+### Output requirements ###
+- Return EXACTLY 3 Level 3 recommendations (ranked best to weakest).
+- For EACH recommendation, provide:
+  - level_3: exact Level 3 string from the schema
+  - confidence: float from 0.00 to 1.00
+  - reasoning: 1-2 sentences explaining why the text fits this Level 3, specifically citing the text's wording
+
+Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object):
+[
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+]
+""".strip()
+    return prompt, allowed_l3_for_branch
+
+
+def create_merge_rerank_prompt(reg_text: str, level2_inputs: list, candidates: list) -> str:
+    candidate_lines = [
+        f"- Level 3: {c['level_3']} | From Level 2: {c['level_2']} | "
+        f"Initial confidence: {c.get('confidence', 0):.2f} | Reason: {c.get('reasoning','')}"
+        for c in candidates
+    ]
+    candidates_str = "\n".join(candidate_lines) if candidate_lines else "(No candidates generated.)"
+
+    prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+You previously evaluated the Regulatory Text separately against {len(level2_inputs)} different Level 2 categories, generating candidate Level 3 recommendations under each. These candidates were scored independently and are NOT yet comparable to each other. Select the FINAL 5 best Level 3 recommendations overall.
+
+How to decide (important):
+- Re-evaluate every candidate against the Regulatory Text directly - do not simply trust the initial confidence scores.
+- It is entirely possible only ONE Level 2 category is actually correct - if so, most or all of the final 5 should come from that single Level 2's candidates.
+- Do not force diversity across Level 2 categories - pick purely on which Level 3 values best match the text.
+- Select only from the candidate list below; do not introduce new Level 3 values.
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+### Candidates gathered from per-Level-2 evaluation ###
+{candidates_str}
+
+### Output requirements ###
+- Return EXACTLY 5 Level 3 recommendations (ranked best to weakest), re-ranked from the candidates above.
+- For EACH recommendation, provide:
+  - level_3: exact Level 3 string (must match one of the candidates above exactly)
+  - confidence: float from 0.00 to 1.00, re-assessed against the Regulatory Text and against the other candidates
+  - reasoning: 1-2 sentences explaining why this ranks where it does
+
+Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object):
+[
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+]
+""".strip()
+    return prompt
+
+
+def classify_regulatory_row(row: pd.Series,
+                             df_mapping: pd.DataFrame,
+                             text_col: str,
+                             l2_col: str) -> dict:
+
+    reg_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
+
+    l2_raw = "" if pd.isna(row.get(l2_col)) else str(row.get(l2_col))
+    level2_inputs = [item.strip() for item in l2_raw.split("|") if item.strip()]
+
+    # Allowed L3 list strictly from mapping across ALL given L2 (used only for final enforcement)
+    filtered_map = df_mapping[df_mapping["risk_taxonomy_l2"].isin(level2_inputs)]
+    allowed_level3 = (
+        filtered_map["risk_taxonomy_l3"]
+        .dropna()
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+
+    if not allowed_level3:
+        return {
+            "selected_level_3": ["NO_MATCH", "NO_MATCH", "NO_MATCH"],
+            "reasoning": "No Level 3 options found in mapping for the provided Level 2 context."
+        }
+
+    # ---------------- Stage A: per-L2 candidate generation ----------------
+    all_candidates = []
+    for l2 in level2_inputs:
+        stage_a_prompt, allowed_for_branch = create_per_l2_prompt(reg_text, l2, df_mapping)
+
+        if not allowed_for_branch:
+            continue  # no L3s under this L2, skip
+
+        content_a = call_model_with_refresh(stage_a_prompt)
+        try:
+            parsed_a = extract_json_object(content_a)
+            if not isinstance(parsed_a, list):
+                raise ValueError("Stage A output was not a JSON array")
+        except Exception:
+            # fallback: take first up to 3 allowed values for this branch
+            parsed_a = [
+                {"level_3": v, "confidence": 0.0, "reasoning": "Fallback: model output was not valid JSON."}
+                for v in allowed_for_branch[:3]
+            ]
+
+        for item in parsed_a:
+            item["level_2"] = l2
+        all_candidates.extend(parsed_a)
+
+    if not all_candidates:
+        return {
+            "selected_level_3": allowed_level3[:3] if len(allowed_level3) >= 3 else
+                (allowed_level3 + allowed_level3[:1] * (3 - len(allowed_level3))),
+            "reasoning": "Stage A produced no candidates; fallback to mapping-derived options."
+        }
+
+    # ---------------- Stage B: merge + re-rank ----------------
+    stage_b_prompt = create_merge_rerank_prompt(reg_text, level2_inputs, all_candidates)
+    content_b = call_model_with_refresh(stage_b_prompt)
+
+    try:
+        obj_list = extract_json_object(content_b)
+        if not isinstance(obj_list, list):
+            raise ValueError("Stage B output was not a JSON array")
+    except Exception as e:
+        # fallback: take top candidates by their Stage A confidence, padded from allowed_level3
+        sorted_candidates = sorted(all_candidates, key=lambda c: c.get("confidence", 0), reverse=True)
+        fallback_l3 = [c["level_3"] for c in sorted_candidates[:5]]
+        if len(fallback_l3) < 5:
+            fallback_l3 += allowed_level3[: (5 - len(fallback_l3))]
+        return {
+            "selected_level_3": fallback_l3,
+            "reasoning": f"Stage B output was not valid JSON; fallback to Stage A candidates. Parse error: {str(e)[:200]}"
+        }
+
+    obj = {
+        "selected_level_3": [item.get("level_3", "") for item in obj_list],
+        "reasoning": " | ".join(item.get("reasoning", "") for item in obj_list) or
+                     "Selected from mapping-derived Level 3 options for the provided Level 2 context."
+    }
+
+    # Enforce mapping (removes made-up labels), same as before
+    obj["selected_level_3"] = enforce_level3_from_mapping(
+        obj.get("selected_level_3", []),
+        allowed_level3,
+        min_k=5
+    )
+
+    if "reasoning" not in obj or not str(obj["reasoning"]).strip():
+        obj["reasoning"] = "Selected from mapping-derived Level 3 options for the provided Level 2 context."
+
+    return obj
+
+
+
