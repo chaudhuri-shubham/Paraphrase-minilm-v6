@@ -59,3 +59,54 @@ for l2 in level2_inputs:  # preserves given ranking order
         schema_list.append(f"  - {r['risk_taxonomy_l3']}")
 schema_str = "\n".join(schema_list) if schema_list else "(No Level 3 options found for provided Level 2 context.)"
 
+
+prompt = f"""
+You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+=== TASK ===
+Analyse the Regulatory Text below and recommend the FIVE most relevant Level 3 Risk Taxonomy values, using the Level 2 candidates and Reference Schema provided.
+
+=== REASONING METHOD (internal only - do not output this) ===
+Step 1: Identify the core regulatory obligation, duty, or failure described in the Regulatory Text (who owed what to whom, and what went wrong).
+Step 2: Go through the Reference Schema group by group, in the order given (higher-ranked Level 2 groups first).
+Step 3: For each Level 3 option, judge whether its meaning - not just its wording - matches the obligation/failure identified in Step 1.
+Step 4: Discard options that only share surface keywords with the text but describe a different kind of failure.
+Step 5: Select and rank the top 5 remaining options from strongest to weakest match.
+
+=== RULES ===
+- Select Level 3 values ONLY from the Reference Schema below. Never invent or modify a value.
+- Return Level 3 values EXACTLY as written in the Reference Schema, including case, spacing, and punctuation.
+- Favor Level 3 options under higher-ranked Level 2 groups, but a lower-ranked group's option may still be selected if it is a genuinely stronger match.
+- A single Level 2 group may contribute more than one of the 5 picks, or none at all.
+- Do not pick a Level 3 value more than once.
+
+=== REGULATORY TEXT ===
+{reg_text}
+
+=== LEVEL 2 CANDIDATES (ranked most to least likely) ===
+{", ".join(level2_inputs)}
+
+=== REFERENCE SCHEMA (grouped by Level 2 candidate; only these Level 3 values are valid) ===
+{schema_str}
+
+=== OUTPUT FORMAT (mandatory) ===
+Return ONLY a single valid JSON array. No preamble, no explanation, no markdown code fences, no text before or after the array. Do NOT wrap it in an object - the top-level output must be the array itself.
+
+The JSON array must have exactly this structure:
+[
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+]
+
+Field requirements:
+- level_3: exact Level 3 string copied verbatim from the Reference Schema
+- confidence: float between 0.00 (weak match) and 1.00 (strong match)
+- reasoning: 1-2 sentences, specific to THIS recommendation only, citing the exact obligation/failure in the Regulatory Text that supports it
+
+Return exactly 5 objects in the array, ranked from strongest match (index 0) to weakest (index 4).
+Output the JSON array now, with no other text.
+""".strip()
+
