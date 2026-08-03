@@ -1,0 +1,61 @@
+prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+Analyse the Regulatory Text and the pre-tagged Level 2 taxonomy candidates (given_l2), then recommend the FIVE most relevant Level 3 Risk Taxonomy values.
+
+You will be given:
+1) Regulatory Text (reg_text)
+2) Pre-tagged Level 2 taxonomy candidates (given_l2) — these are the top candidate L2 labels from an upstream model, listed in order of likelihood
+3) Reference Schema (authoritative list of valid Level 3 options, grouped under each Level 2 candidate)
+
+How to decide (important):
+- Use the given Level 2 candidates to narrow the search space. Consider ALL of them, but weight your search toward the higher-ranked L2 candidates first, since they are more likely correct.
+- The Reference Schema is the SOURCE OF TRUTH: you MUST select Level 3 values ONLY from the Reference Schema list below.
+- Return the Level 3 values EXACTLY as written in the Reference Schema (case and spacing).
+- Do not default to picking one Level 3 per Level 2 candidate — if the text strongly supports two Level 3 values under the same Level 2, it is fine to return both, and it is fine for a lower-ranked Level 2 to contribute zero picks.
+- Rank the 5 recommendations from best fit to weakest fit, based on how well the text matches the Level 3 definition/wording, not just keyword overlap.
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+Target Level 2 Candidates (ranked, given_l2):
+{", ".join(level2_inputs)}
+
+### Reference Schema (grouped by Level 2 candidate; allowed Level 3 values) ###
+{schema_str}
+
+### Output requirements ###
+- You MUST return EXACTLY 5 Level 3 recommendations (ranked best to weakest).
+- For EACH recommendation, provide:
+  - level_3: exact Level 3 string from the schema
+  - confidence: float from 0.00 to 1.00
+    - 0.00 = low confidence / weak match
+    - 1.00 = very confident / strong match
+  - reasoning: 1-2 sentences explaining why the text fits this specific Level 3 (reference schema wording and specific details from the regulatory text)
+- Give a SEPARATE reasoning for EACH recommendation. Do not combine reasoning across recommendations.
+- If fewer than 5 valid Level 3 values exist across all given Level 2 candidates, return as many as are available and note this in the reasoning of the last item.
+
+Return ONLY valid JSON (no extra text, no markdown):
+{{
+  "recommendations": [
+    {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+    {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+    {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+    {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+    {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+  ]
+}}
+""".strip()
+
+
+
+schema_list = []
+for l2 in level2_inputs:  # preserves given ranking order
+    subset = filtered_schema[filtered_schema["risk_taxonomy_l2"] == l2]
+    schema_list.append(f"[{l2}]")
+    for _, r in subset.iterrows():
+        schema_list.append(f"  - {r['risk_taxonomy_l3']}")
+schema_str = "\n".join(schema_list) if schema_list else "(No Level 3 options found for provided Level 2 context.)"
+
