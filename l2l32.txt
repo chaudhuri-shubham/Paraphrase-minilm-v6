@@ -1,0 +1,74 @@
+import numpy as np
+import ast
+
+# Check the type first
+print(type(historical_df["embedding"].iloc[0]))
+
+# If it's already a list/np.array, this just works:
+embedding_matrix = np.vstack(historical_df["embedding"].values)
+
+# If it's a stringified list (e.g. "[0.123, -0.456, ...]"), parse first:
+# historical_df["embedding"] = historical_df["embedding"].apply(ast.literal_eval)
+# embedding_matrix = np.vstack(historical_df["embedding"].values)
+
+print(embedding_matrix.shape)  # should be (num_records, embedding_dim)
+
+
+.....
+
+# When building your eval pipeline:
+# - retrieval_pool_df = training/labeled records ONLY (never the eval set)
+# - eval_df = the records you're actually scoring accuracy on
+
+retrieval_pool_df = historical_df[historical_df["split"] == "train"].reset_index(drop=True)
+retrieval_embedding_matrix = np.vstack(retrieval_pool_df["embedding"].values)
+
+.....
+
+# Normalize once, so cosine similarity becomes a simple dot product
+norms = np.linalg.norm(retrieval_embedding_matrix, axis=1, keepdims=True)
+normalized_matrix = retrieval_embedding_matrix / norms
+
+....
+
+def retrieve_few_shots(query_embedding: np.ndarray,
+                        retrieval_pool_df: pd.DataFrame,
+                        normalized_matrix: np.ndarray,
+                        k: int = 4,
+                        exclude_record_id=None,
+                        id_col: str = "record_id") -> list[dict]:
+
+    query_norm = query_embedding / np.linalg.norm(query_embedding)
+    sims = normalized_matrix @ query_norm  # cosine similarity, shape (num_records,)
+
+    # optional: exclude the exact same record if it's somehow in the pool
+    if exclude_record_id is not None:
+        mask = retrieval_pool_df[id_col] != exclude_record_id
+        sims = np.where(mask.values, sims, -1)
+
+    top_idx = np.argsort(sims)[-k:][::-1]
+
+    results = []
+    for i in top_idx:
+        results.append({
+            "text": retrieval_pool_df.iloc[i]["reg_text"],
+            "l2": retrieval_pool_df.iloc[i]["risk_taxonomy_l2"],   # if you have ground-truth L2
+            "l3": retrieval_pool_df.iloc[i]["risk_taxonomy_l3"],   # ground-truth L3
+            "similarity": float(sims[i])
+        })
+    return results
+
+.....
+
+few_shots = retrieve_few_shots_filtered(query_embedding, retrieval_pool_df, normalized_matrix, level2_inputs, k=4)
+
+few_shot_str = "\n\n".join(
+    f'Example {i+1}:\nText: "{ex["text"][:400]}"\nCorrect Level 3: {ex["l3"]}'
+    for i, ex in enumerate(few_shots)
+)
+
+....
+
+### Similar Past Examples (ground truth, for calibration only) ###
+{few_shot_str}
+
