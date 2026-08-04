@@ -407,3 +407,73 @@ for _, row in df_poc_records.iterrows():
         k_few_shot=4
     )
     results.append(result)
+
+
+# =========================================================
+# Run this ONCE before calling run_classification_pipeline
+# (same as Step 7 from before - builds the global retrieval_pool)
+# =========================================================
+
+few_shot_source_df = df_mapping[df_mapping["split"] == "train"] if "split" in df_mapping.columns else df_mapping
+
+few_shot_df = stratified_sample_by_l3(
+    few_shot_source_df,
+    l3_col="risk_taxonomy_l3",
+    n_per_class=10
+)
+
+retrieval_pool = build_retrieval_pool(
+    few_shot_df,
+    embedding_col="text_embedding",
+    text_col="reg_text",
+    l2_col="risk_taxonomy_l2",
+    l3_col="risk_taxonomy_l3"
+)
+
+print(f"Few-shot pool size: {len(retrieval_pool['pool_df'])} rows")
+
+
+# =========================================================
+# MAIN PIPELINE (signature unchanged)
+# =========================================================
+
+def run_classification_pipeline(input_df: pd.DataFrame,
+                                  reference_df: pd.DataFrame,
+                                  #few_shots_df: pd.DataFrame,
+                                  text_col: str,
+                                  l2_col: str,
+                                  max_completion_tokens: int = MAX_COMPLETION_TOKENS) -> pd.DataFrame:
+
+    print(f"Starting classification for {len(input_df)} records...")
+
+    start_all = time.perf_counter()
+
+    def _process_row(row: pd.Series) -> pd.Series:
+        t0 = time.perf_counter()
+
+        # embedding_col only passed if input_df actually has that column
+        emb_col = "text_embedding" if "text_embedding" in row.index else None
+
+        result_obj = classify_regulatory_row(
+            row=row,
+            df_mapping=reference_df,
+            retrieval_pool=retrieval_pool,   # closure - built once above, not a new param
+            text_col=text_col,
+            l2_col=l2_col,
+            embedding_col=emb_col,
+            k_few_shot=4
+        )
+        t1 = time.perf_counter()
+        return pd.Series({"Result": result_obj, "llm_seconds": t1 - t0})
+
+    out = input_df.progress_apply(_process_row, axis=1)
+
+    elapsed_all = time.perf_counter() - start_all
+    avg = out["llm_seconds"].mean()
+
+    final_df = pd.concat([input_df.reset_index(drop=True), out.reset_index(drop=True)], axis=1)
+
+    print(f"Overall elapsed: {elapsed_all:.2f}s")
+    print(f"Avg per row: {avg:.2f}s | Estimated total for {len(final_df)} rows: {(avg*len(final_df))/60:.1f} minutes")
+
+    return final_df
