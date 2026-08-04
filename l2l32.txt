@@ -72,3 +72,338 @@ few_shot_str = "\n\n".join(
 ### Similar Past Examples (ground truth, for calibration only) ###
 {few_shot_str}
 
+
+#############
+
+import pandas as pd
+import numpy as np
+import re
+import ast
+from openai import OpenAI
+
+client = OpenAI()
+
+# =========================================================
+# STEP 1: Build the stratified few-shot pool (10 per L3 class)
+# =========================================================
+
+def stratified_sample_by_l3(df: pd.DataFrame,
+                              l3_col: str = "risk_taxonomy_l3",
+                              n_per_class: int = 10,
+                              random_state: int = 42) -> pd.DataFrame:
+    df = df.copy()
+    df["_row_id"] = df.index
+
+    df["_l3_list"] = df[l3_col].fillna("").apply(
+        lambda x: [v.strip() for v in x.split("|") if v.strip()]
+    )
+    exploded = df.explode("_l3_list").rename(columns={"_l3_list": "_l3_single"})
+    exploded = exploded[exploded["_l3_single"] != ""]
+
+    sampled_exploded = (
+        exploded
+        .groupby("_l3_single", group_keys=False)
+        .apply(lambda g: g.sample(n=min(len(g), n_per_class), random_state=random_state))
+    )
+
+    sampled_row_ids = sampled_exploded["_row_id"].drop_duplicates()
+    result = df[df["_row_id"].isin(sampled_row_ids)].drop(columns=["_row_id", "_l3_list"])
+    return result.reset_index(drop=True)
+
+
+# =========================================================
+# STEP 2: Parse embeddings robustly (handles nan/inf tokens)
+# =========================================================
+
+def safe_parse_embedding(x):
+    if isinstance(x, (list, np.ndarray)):
+        return list(x)
+    if not isinstance(x, str):
+        return None
+    nums = re.findall(r"-?\d+\.?\d*(?:[eE][-+]?\d+)?|nan|inf|-inf", x)
+    if not nums:
+        return None
+    try:
+        return [float(n) for n in nums]
+    except ValueError:
+        return None
+
+
+def embed_text(text: str, model: str = "text-embedding-3-small") -> np.ndarray:
+    """Embed a single text on the fly (used for the query record if it has no stored embedding)."""
+    resp = client.embeddings.create(model=model, input=[text])
+    return np.array(resp.data[0].embedding)
+
+
+# =========================================================
+# STEP 3: Build retrieval pool (embeddings + metadata)
+# =========================================================
+
+def build_retrieval_pool(few_shot_df: pd.DataFrame,
+                          embedding_col: str = "text_embedding",
+                          text_col: str = "reg_text",
+                          l2_col: str = "risk_taxonomy_l2",
+                          l3_col: str = "risk_taxonomy_l3") -> dict:
+    """
+    Returns a dict with the cleaned pool dataframe, normalized embedding matrix,
+    ready for cosine-similarity retrieval.
+    """
+    df = few_shot_df.copy()
+    df["_parsed_emb"] = df[embedding_col].apply(safe_parse_embedding)
+
+    valid_mask = df["_parsed_emb"].apply(lambda x: isinstance(x, list) and len(x) > 0)
+    dropped = (~valid_mask).sum()
+    if dropped > 0:
+        print(f"Warning: dropped {dropped} few-shot rows with unparseable embeddings")
+
+    df = df[valid_mask].reset_index(drop=True)
+
+    matrix = np.vstack(df["_parsed_emb"].values)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-10  # guard against zero-vector division
+    normalized_matrix = matrix / norms
+
+    return {
+        "pool_df": df,
+        "normalized_matrix": normalized_matrix,
+        "text_col": text_col,
+        "l2_col": l2_col,
+        "l3_col": l3_col,
+    }
+
+
+# =========================================================
+# STEP 4: Retrieval function (filtered to candidate L2 branches)
+# =========================================================
+
+def retrieve_few_shots(query_embedding: np.ndarray,
+                        retrieval_pool: dict,
+                        level2_inputs: list,
+                        k: int = 4,
+                        min_similarity: float = 0.3) -> list[dict]:
+
+    pool_df = retrieval_pool["pool_df"]
+    normalized_matrix = retrieval_pool["normalized_matrix"]
+    text_col = retrieval_pool["text_col"]
+    l2_col = retrieval_pool["l2_col"]
+    l3_col = retrieval_pool["l3_col"]
+
+    # Prefer examples whose L2 overlaps with the current candidates
+    branch_mask = pool_df[l2_col].apply(
+        lambda x: any(l2 in str(x).split("|") for l2 in level2_inputs)
+    )
+
+    if branch_mask.sum() >= k:
+        pool = pool_df[branch_mask].reset_index(drop=True)
+        matrix = normalized_matrix[branch_mask.values]
+    else:
+        pool = pool_df
+        matrix = normalized_matrix
+
+    query_norm = query_embedding / max(np.linalg.norm(query_embedding), 1e-10)
+    sims = matrix @ query_norm
+
+    top_idx = np.argsort(sims)[-k:][::-1]
+
+    results = []
+    for i in top_idx:
+        if sims[i] < min_similarity:
+            continue
+        results.append({
+            "text": str(pool.iloc[i][text_col]),
+            "l3": str(pool.iloc[i][l3_col]),
+            "similarity": float(sims[i])
+        })
+    return results
+
+
+# =========================================================
+# STEP 5: Prompt builder (your best single-call structure + few-shot section)
+# =========================================================
+
+def create_taxonomy_prompt(reg_text: str,
+                            level2_inputs: list,
+                            reference_df: pd.DataFrame,
+                            few_shots: list) -> str:
+
+    filtered_map = reference_df[reference_df["risk_taxonomy_l2"].isin(level2_inputs)]
+
+    schema_list = []
+    for l2 in level2_inputs:
+        subset = filtered_map[filtered_map["risk_taxonomy_l2"] == l2]
+        if subset.empty:
+            continue
+        schema_list.append(f"[{l2}]")
+        for _, r in subset.iterrows():
+            schema_list.append(f"  - {r['risk_taxonomy_l3']}")
+    schema_str = "\n".join(schema_list) if schema_list else "(No Level 3 options found for provided Level 2 context.)"
+
+    if few_shots:
+        few_shot_str = "\n\n".join(
+            f'Example {i+1} (similarity {ex["similarity"]:.2f}):\n'
+            f'Text: "{ex["text"][:350]}"\n'
+            f'Correct Level 3: {ex["l3"]}'
+            for i, ex in enumerate(few_shots)
+        )
+    else:
+        few_shot_str = "(No sufficiently similar past examples found.)"
+
+    prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+Analyse the Regulatory Text and the pre-tagged Level 2 taxonomy candidates (given_l2), then recommend the FIVE most relevant Level 3 Risk Taxonomy values.
+
+You will be given:
+1) Regulatory Text (reg_text)
+2) Pre-tagged Level 2 taxonomy candidates (given_l2) - ranked by likelihood; typically only ONE is actually correct
+3) Similar Past Examples (real labeled examples for calibration)
+4) Reference Schema (authoritative list of valid Level 3 options, grouped under each Level 2 candidate)
+
+How to decide (important):
+- Use the given Level 2 candidates to narrow the search space, weighting higher-ranked candidates more heavily.
+- Use the Similar Past Examples to calibrate what kind of text maps to what kind of Level 3 label in this taxonomy - do not copy an example's label blindly, use it as a pattern reference.
+- The Reference Schema is the SOURCE OF TRUTH: you MUST select Level 3 values ONLY from the Reference Schema list below.
+- Return the Level 3 values EXACTLY as written in the Reference Schema (case and spacing).
+- Do not force equal representation across Level 2 branches - if only one branch truly fits, most or all recommendations should come from it.
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+Target Level 2 Candidates (ranked, given_l2):
+{", ".join(level2_inputs)}
+
+### Similar Past Examples (ground truth, for calibration only) ###
+{few_shot_str}
+
+### Reference Schema (grouped by Level 2 candidate; allowed Level 3 values) ###
+{schema_str}
+
+### Output requirements ###
+- Return EXACTLY 5 Level 3 recommendations (ranked best to weakest).
+- For EACH recommendation, provide:
+  - level_3: exact Level 3 string from the schema
+  - confidence: float from 0.00 to 1.00
+  - reasoning: 1-2 sentences explaining why the text fits this specific Level 3
+- Give a SEPARATE reasoning for EACH recommendation. Do not combine reasoning across recommendations.
+
+Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object):
+[
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}},
+  {{"level_3": "...", "confidence": 0.00, "reasoning": "..."}}
+]
+""".strip()
+
+    return prompt
+
+
+# =========================================================
+# STEP 6: Full classify function (same signature/output shape as before)
+# =========================================================
+
+def classify_regulatory_row(row: pd.Series,
+                             df_mapping: pd.DataFrame,
+                             retrieval_pool: dict,
+                             text_col: str,
+                             l2_col: str,
+                             embedding_col: str = None,
+                             k_few_shot: int = 4) -> dict:
+
+    reg_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
+
+    l2_raw = "" if pd.isna(row.get(l2_col)) else str(row.get(l2_col))
+    level2_inputs = [item.strip() for item in l2_raw.split("|") if item.strip()]
+
+    filtered_map = df_mapping[df_mapping["risk_taxonomy_l2"].isin(level2_inputs)]
+    allowed_level3 = (
+        filtered_map["risk_taxonomy_l3"].dropna().astype(str).drop_duplicates().tolist()
+    )
+
+    if not allowed_level3:
+        return {
+            "selected_level_3": ["NO_MATCH", "NO_MATCH", "NO_MATCH"],
+            "reasoning": "No Level 3 options found in mapping for the provided Level 2 context."
+        }
+
+    # Get query embedding: use stored one if available, else embed on the fly
+    if embedding_col and embedding_col in row.index and pd.notna(row.get(embedding_col)):
+        query_embedding = np.array(safe_parse_embedding(row.get(embedding_col)))
+    else:
+        query_embedding = embed_text(reg_text)
+
+    few_shots = retrieve_few_shots(query_embedding, retrieval_pool, level2_inputs, k=k_few_shot)
+
+    prompt = create_taxonomy_prompt(reg_text, level2_inputs, df_mapping, few_shots)
+    content = call_model_with_refresh(prompt)
+
+    try:
+        obj_list = extract_json_object(content)
+        if not isinstance(obj_list, list):
+            raise ValueError("Output was not a JSON array")
+    except Exception as e:
+        fallback = allowed_level3[:5] if len(allowed_level3) >= 5 else \
+            (allowed_level3 + allowed_level3[:1] * (5 - len(allowed_level3)))
+        return {
+            "selected_level_3": fallback,
+            "reasoning": f"Model output was not valid JSON; fallback to mapping-derived options. Parse error: {str(e)[:200]}"
+        }
+
+    obj = {
+        "selected_level_3": [item.get("level_3", "") for item in obj_list],
+        "reasoning": " | ".join(item.get("reasoning", "") for item in obj_list) or
+                     "Selected from mapping-derived Level 3 options for the provided Level 2 context."
+    }
+
+    obj["selected_level_3"] = enforce_level3_from_mapping(
+        obj.get("selected_level_3", []),
+        allowed_level3,
+        min_k=5
+    )
+
+    if "reasoning" not in obj or not str(obj["reasoning"]).strip():
+        obj["reasoning"] = "Selected from mapping-derived Level 3 options for the provided Level 2 context."
+
+    return obj
+
+
+# =========================================================
+# STEP 7: End-to-end setup (run once)
+# =========================================================
+
+# few_shot_source_df must NOT overlap with your eval/test set
+few_shot_source_df = df_mapping[df_mapping["split"] == "train"] if "split" in df_mapping.columns else df_mapping
+
+few_shot_df = stratified_sample_by_l3(
+    few_shot_source_df,
+    l3_col="risk_taxonomy_l3",
+    n_per_class=10
+)
+
+retrieval_pool = build_retrieval_pool(
+    few_shot_df,
+    embedding_col="text_embedding",
+    text_col="reg_text",
+    l2_col="risk_taxonomy_l2",
+    l3_col="risk_taxonomy_l3"
+)
+
+print(f"Few-shot pool size: {len(retrieval_pool['pool_df'])} rows")
+
+.....
+
+results = []
+for _, row in df_poc_records.iterrows():
+    result = classify_regulatory_row(
+        row=row,
+        df_mapping=df_mapping,
+        retrieval_pool=retrieval_pool,
+        text_col="reg_text",
+        l2_col="predicted_l2",       # your predicted L2 column
+        embedding_col="text_embedding",  # if df_poc_records already has embeddings; else omit
+        k_few_shot=4
+    )
+    results.append(result)
