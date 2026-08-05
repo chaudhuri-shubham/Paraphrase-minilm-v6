@@ -372,3 +372,182 @@ def classify_regulatory_row(row: pd.Series,
 
 
 
+######$$$$##############$#
+
+import pandas as pd
+
+# =========================================================
+# STEP 1: Compute L3 frequency from training data (pipe-separated aware)
+# =========================================================
+
+def compute_l3_frequencies(train_df: pd.DataFrame, l3_col: str = "risk_taxonomy_l3") -> pd.Series:
+    """
+    Returns a Series: index = individual L3 label, value = count of occurrences
+    across the training set, correctly handling pipe-separated multi-label rows.
+    """
+    exploded = (
+        train_df[l3_col]
+        .fillna("")
+        .apply(lambda x: [v.strip() for v in x.split("|") if v.strip()])
+        .explode()
+    )
+    exploded = exploded[exploded != ""]
+    return exploded.value_counts()
+
+
+# Run once on your training data
+l3_frequency = compute_l3_frequencies(train_df, l3_col="risk_taxonomy_l3")
+
+print(l3_frequency.head(10))
+print(f"Total distinct L3 labels seen in training: {len(l3_frequency)}")
+
+# Optional: bucket into tiers instead of raw counts (often more useful for prompting
+# than raw numbers, since raw counts can be noisy/misleading to an LLM)
+def frequency_tier(count: int, quantiles: dict) -> str:
+    if count >= quantiles["high"]:
+        return "HIGH"
+    elif count >= quantiles["medium"]:
+        return "MEDIUM"
+    else:
+        return "LOW"
+
+quantile_thresholds = {
+    "high": l3_frequency.quantile(0.75),
+    "medium": l3_frequency.quantile(0.40),
+}
+
+l3_frequency_tier = l3_frequency.apply(lambda c: frequency_tier(c, quantile_thresholds))
+print(l3_frequency_tier.value_counts())
+
+...............
+
+def build_schema_with_frequency(reference_df: pd.DataFrame,
+                                  level2_inputs: list,
+                                  l3_frequency_tier: pd.Series) -> str:
+
+    filtered_map = reference_df[reference_df["risk_taxonomy_l2"].isin(level2_inputs)]
+
+    schema_list = []
+    for l2 in level2_inputs:
+        subset = filtered_map[filtered_map["risk_taxonomy_l2"] == l2]
+        if subset.empty:
+            continue
+        schema_list.append(f"[{l2}]")
+        for _, r in subset.iterrows():
+            l3_val = r["risk_taxonomy_l3"]
+            tier = l3_frequency_tier.get(l3_val, "UNSEEN")  # UNSEEN = never appeared in training data
+            schema_list.append(f"  - {l3_val}  (historical frequency: {tier})")
+
+    return "\n".join(schema_list) if schema_list else "(No Level 3 options found for provided Level 2 context.)"
+
+...........
+
+def create_taxonomy_prompt(reg_text: str,
+                            level2_inputs: list,
+                            reference_df: pd.DataFrame,
+                            l3_frequency_tier: pd.Series) -> str:
+
+    schema_str = build_schema_with_frequency(reference_df, level2_inputs, l3_frequency_tier)
+
+    prompt = f"""
+Role: You are a Regulatory Compliance Expert and Taxonomy Specialist.
+
+Task:
+Analyse the Regulatory Text and the pre-tagged Level 2 taxonomy candidates (given_l2), then recommend the FIVE most relevant Level 3 Risk Taxonomy values.
+
+You will be given:
+1) Regulatory Text (reg_text)
+2) Pre-tagged Level 2 taxonomy candidates (given_l2), ranked by likelihood
+3) Reference Schema (authoritative list of valid Level 3 options, grouped under each Level 2 candidate), annotated with each label's historical frequency in past classifications
+
+IMPORTANT - Handling "(TO BE RETIRED)" labels:
+- Some Level 3 values are prefixed with "(TO BE RETIRED)". This is a legacy administrative marker only - it does NOT mean the label is invalid.
+- Judge fit based on the substantive part of the label, ignoring the prefix. Always return the value EXACTLY as written, including the prefix if present.
+
+IMPORTANT - Using historical frequency:
+- Each Level 3 option is tagged with a historical frequency tier: HIGH, MEDIUM, LOW, or UNSEEN.
+- HIGH/MEDIUM means this label has been correctly assigned often in the past - treat this as a mild prior: when the text is a genuinely close call between two similarly-fitting options, prefer the one with higher historical frequency.
+- This is a TIE-BREAKER signal only, NOT a hard rule. If the text's actual wording clearly and specifically supports a LOW or UNSEEN label over a HIGH one, you MUST still select the LOW/UNSEEN label - textual evidence always outweighs historical frequency.
+- Do not let frequency cause you to ignore strong direct evidence in the text for a rare label. Rare labels exist because rare situations exist.
+
+How to decide (important):
+- Identify the specific regulatory obligation or failure in the text first, before consulting the schema.
+- Use the given Level 2 context to narrow the search space, weighting higher-ranked candidates more heavily.
+- The Reference Schema is the SOURCE OF TRUTH: select Level 3 values ONLY from it, returned EXACTLY as written (excluding the frequency annotation, which is guidance only and not part of the label).
+
+Inputs:
+Regulatory Text:
+{reg_text}
+
+Target Level 2 Context (given_l2):
+{", ".join(level2_inputs)}
+
+### Reference Schema (filtered for Level 2 context; allowed Level 3 values with historical frequency) ###
+{schema_str}
+
+### Output requirements ###
+- Return EXACTLY 5 Level 3 recommendations (ranked best to weakest).
+- For EACH recommendation, write reasoning FIRST, then the label:
+  - reasoning: 1-2 sentences identifying the specific text evidence supporting this label. If frequency was used as a tie-breaker, briefly note that.
+  - level_3: exact Level 3 string from the schema (do NOT include the frequency annotation in this field)
+  - confidence: float from 0.00 to 1.00
+
+Return ONLY a valid JSON array (no extra text, no markdown, no wrapping object). Field order: reasoning before level_3.
+[
+  {{"reasoning": "...", "level_3": "...", "confidence": 0.00}},
+  {{"reasoning": "...", "level_3": "...", "confidence": 0.00}},
+  {{"reasoning": "...", "level_3": "...", "confidence": 0.00}},
+  {{"reasoning": "...", "level_3": "...", "confidence": 0.00}},
+  {{"reasoning": "...", "level_3": "...", "confidence": 0.00}}
+]
+""".strip()
+    return prompt
+
+...........
+
+
+def classify_regulatory_row(row: pd.Series,
+                             df_mapping: pd.DataFrame,
+                             text_col: str,
+                             l2_col: str,
+                             l3_frequency_tier: pd.Series) -> dict:
+
+    reg_text = "" if pd.isna(row.get(text_col)) else str(row.get(text_col))
+    l2_raw = "" if pd.isna(row.get(l2_col)) else str(row.get(l2_col))
+    level2_inputs = [item.strip() for item in l2_raw.split("|") if item.strip()]
+
+    filtered_map = df_mapping[df_mapping["risk_taxonomy_l2"].isin(level2_inputs)]
+    allowed_level3 = filtered_map["risk_taxonomy_l3"].dropna().astype(str).drop_duplicates().tolist()
+
+    if not allowed_level3:
+        return {"selected_level_3": ["NO_MATCH"]*3, "reasoning": "No Level 3 options found."}
+
+    prompt = create_taxonomy_prompt(reg_text, level2_inputs, df_mapping, l3_frequency_tier)
+    content = call_model_with_refresh(prompt)
+
+    try:
+        obj_list = extract_json_object(content)
+        if not isinstance(obj_list, list):
+            raise ValueError("not a list")
+    except Exception as e:
+        fallback = allowed_level3[:5] if len(allowed_level3) >= 5 else \
+            (allowed_level3 + allowed_level3[:1]*(5-len(allowed_level3)))
+        return {"selected_level_3": fallback, "reasoning": f"Parse failed: {str(e)[:200]}"}
+
+    obj = {
+        "selected_level_3": [item.get("level_3", "") for item in obj_list],
+        "reasoning": " | ".join(item.get("reasoning", "") for item in obj_list)
+    }
+    obj["selected_level_3"] = enforce_level3_from_mapping(obj["selected_level_3"], allowed_level3, min_k=5)
+    return obj
+
+
+.......
+
+# Does your eval set's true L3 distribution actually skew toward frequent training labels?
+# If most errors are on already-common labels, frequency weighting won't help much.
+true_l3_freq_in_eval = compute_l3_frequencies(eval_df, l3_col="true_l3")
+print(true_l3_freq_in_eval.head(10))
+
+
+
